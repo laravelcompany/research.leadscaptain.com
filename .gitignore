@@ -1,0 +1,6 @@
+data/
+backups/
+.env
+bin/
+frontend/dist/
+frontend/node_modules/

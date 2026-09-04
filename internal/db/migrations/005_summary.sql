@@ -1,0 +1,2 @@
+ALTER TABLE leads ADD COLUMN summary TEXT;
+ALTER TABLE leads ADD COLUMN raw_json TEXT;
