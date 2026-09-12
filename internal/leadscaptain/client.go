@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
+	"sync/atomic"
 	"time"
 )
 
@@ -104,7 +106,9 @@ func (c *Client) Search(ctx context.Context, p SearchParams) ([]Lead, error) {
 		Page       int `json:"page"`
 		Limit      int `json:"limit"`
 	}
-	json.NewDecoder(resp.Body).Decode(&raw)
+	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil && err != io.EOF {
+		return nil, fmt.Errorf("leadscaptain decode: %w", err)
+	}
 	var out []Lead
 	for _, d := range raw.Data {
 		email := d.Email
@@ -181,20 +185,20 @@ func (c *Client) Search(ctx context.Context, p SearchParams) ([]Lead, error) {
 	return out, nil
 }
 
-var mockSeq int64
+var mockSeq atomic.Int64
 
 func mockLeads(p SearchParams) []Lead {
 	firsts := []string{"Alice", "Bob", "Carol", "David", "Emma", "Frank", "Grace", "Henry", "Iris", "Jack", "Karen", "Leo", "Maya", "Noah", "Olivia", "Paul", "Quinn", "Rosa", "Sam", "Tina"}
 	lasts := []string{"Smith", "Jones", "Williams", "Brown", "Taylor", "Davies", "Wilson", "Evans", "Thomas", "Roberts", "Johnson", "Lewis", "Walker", "Hall", "Allen", "Young", "Wright", "King", "Scott", "Green"}
 	companies := []string{"Acme Ltd", "Globex", "Initech", "Umbrella", "Stark Industries", "Wayne Enterprises", "Hooli", "Massive Dynamic", "Wonka Industries", "Cyberdyne"}
 	domains := []string{"acme.co.uk", "globex.com", "initech.io", "umbrella.tech", "stark.co.uk", "wayne.co.uk", "hooli.com", "massive.co.uk", "wonka.co.uk", "cyberdyne.ai"}
-	mockSeq++
+	mockSeq.Add(1)
 	var r []Lead
 	title := p.Q
 	if title == "" {
 		title = "CTO"
 	}
-	seed := mockSeq
+	seed := mockSeq.Load()
 	for i := 0; i < 5; i++ {
 		idx := int(seed*7 + int64(i)*13)
 		r = append(r, Lead{

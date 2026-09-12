@@ -51,7 +51,10 @@ func (c *Client) Chat(ctx context.Context, prompt string, jsonMode bool) (string
 		reqBody.ResponseFormat = &ResponseFormat{Type: "json_object"}
 	}
 	b, _ := json.Marshal(reqBody)
-	req, _ := http.NewRequestWithContext(ctx, "POST", c.baseURL+"/v1/chat/completions", bytes.NewReader(b))
+	req, err := http.NewRequestWithContext(ctx, "POST", c.baseURL+"/v1/chat/completions", bytes.NewReader(b))
+	if err != nil {
+		return "", err
+	}
 	req.Header.Set("Content-Type", "application/json")
 	if c.apiKey != "" {
 		req.Header.Set("Authorization", "Bearer "+c.apiKey)

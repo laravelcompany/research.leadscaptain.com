@@ -4,8 +4,10 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	"research-leads/internal/ai"
@@ -21,13 +23,18 @@ type Engine struct {
 	bus      *events.Bus
 	log      *slog.Logger
 	maxIter  int
+	mu       sync.Mutex
+	// loopGen tracks the newest loop generation per objective; a superseded
+	// loop (e.g. after pause+resume while an iteration was in flight) exits
+	// instead of running in parallel with its replacement.
+	loopGen map[int64]int
 }
 type pendingLead struct {
 	Email, FirstName, LastName, Company, Title, Summary, City, Country string
 }
 
 func New(db *sql.DB, ai *ai.Client, reg *tools.Registry, bus *events.Bus, log *slog.Logger, maxIter int) *Engine {
-	return &Engine{db: db, ai: ai, registry: reg, bus: bus, log: log, maxIter: maxIter}
+	return &Engine{db: db, ai: ai, registry: reg, bus: bus, log: log, maxIter: maxIter, loopGen: map[int64]int{}}
 }
 
 type Action struct {
@@ -37,26 +44,58 @@ type Action struct {
 }
 
 func (e *Engine) Start(ctx context.Context, objectiveID int64) (int64, error) {
+	var objStatus string
+	if err := e.db.QueryRowContext(ctx, "SELECT status FROM objectives WHERE id=?", objectiveID).Scan(&objStatus); err != nil {
+		return 0, fmt.Errorf("objective %d: %w", objectiveID, err)
+	}
+	if objStatus == "running" {
+		return 0, fmt.Errorf("objective %d is already running", objectiveID)
+	}
 	res, err := e.db.ExecContext(ctx, "INSERT INTO agent_runs(objective_id,status,started_at) VALUES(?,'running',CURRENT_TIMESTAMP)", objectiveID)
 	if err != nil {
 		return 0, err
 	}
 	runID, _ := res.LastInsertId()
-	e.db.ExecContext(ctx, "UPDATE objectives SET status='running', started_at=CURRENT_TIMESTAMP WHERE id=?", objectiveID)
+	if _, err := e.db.ExecContext(ctx, "UPDATE objectives SET status='running', started_at=CURRENT_TIMESTAMP WHERE id=?", objectiveID); err != nil {
+		return 0, err
+	}
 	e.bus.Publish(events.Event{Type: "agent.started", Payload: map[string]any{"objective_id": objectiveID, "run_id": runID}})
-	go e.loop(runID, objectiveID)
+	go e.loop(runID, objectiveID, 0)
 	return runID, nil
 }
 
-func (e *Engine) loop(runID, objectiveID int64) {
-	e.log.Info("agent loop started", "run_id", runID, "objective_id", objectiveID)
+func (e *Engine) loop(runID, objectiveID int64, startIter int) {
+	e.log.Info("agent loop started", "run_id", runID, "objective_id", objectiveID, "start_iter", startIter)
 	ctx := context.Background()
-	for i := 0; i < e.maxIter; i++ {
+	e.mu.Lock()
+	e.loopGen[objectiveID]++
+	gen := e.loopGen[objectiveID]
+	e.mu.Unlock()
+	// any 'running' iteration rows left by a superseded loop or a crash are
+	// stale; mark them interrupted so the record stays honest.
+	e.db.ExecContext(ctx, "UPDATE iterations SET status='interrupted', completed_at=CURRENT_TIMESTAMP WHERE run_id=? AND status='running'", runID)
+	defer func() {
+		if r := recover(); r != nil {
+			e.log.Error("agent loop panic", "run_id", runID, "objective_id", objectiveID, "panic", r)
+			e.db.ExecContext(context.Background(), "UPDATE agent_runs SET status='failed', finished_at=CURRENT_TIMESTAMP WHERE id=? AND status='running'", runID)
+			e.db.ExecContext(context.Background(), "UPDATE objectives SET status='failed' WHERE id=? AND status='running'", objectiveID)
+			e.bus.Publish(events.Event{Type: "agent.failed", Payload: map[string]any{"objective_id": objectiveID, "run_id": runID, "error": fmt.Sprint(r)}})
+		}
+	}()
+	for i := startIter; i < e.maxIter; i++ {
 		e.log.Debug("iteration start", "run_id", runID, "iter", i+1)
+		e.mu.Lock()
+		current := e.loopGen[objectiveID] == gen
+		e.mu.Unlock()
+		if !current {
+			e.log.Info("agent loop superseded, exiting", "run_id", runID, "objective_id", objectiveID)
+			return
+		}
 		var status string
 		e.db.QueryRowContext(ctx, "SELECT status FROM objectives WHERE id=?", objectiveID).Scan(&status)
 		if status == "paused" {
 			e.db.ExecContext(ctx, "UPDATE agent_runs SET status='paused' WHERE id=?", runID)
+			e.db.ExecContext(ctx, "UPDATE iterations SET status='interrupted', completed_at=CURRENT_TIMESTAMP WHERE run_id=? AND status='running'", runID)
 			return
 		}
 		if status == "stopped" {
@@ -134,8 +173,8 @@ func (e *Engine) plan(ctx context.Context, objectiveID int64) (Action, string, s
 	var desc string
 	e.db.QueryRowContext(ctx, "SELECT target_leads, description FROM objectives WHERE id=?", objectiveID).Scan(&target, &desc)
 	var total int
-	e.db.QueryRowContext(ctx, "SELECT count(*) FROM leads").Scan(&total)
-	prompt := "Objective: " + desc + "\nTotal leads so far: " + itoa(total) + "\nAvailable tools: search_leads, verify_email, get_statistics, reflect, complete_objective, wait\nRespond ONLY JSON: {\"action\":\"...\",\"reason\":\"...\",\"parameters\":{...}}"
+	e.db.QueryRowContext(ctx, "SELECT count(*) FROM leads WHERE objective_id=?", objectiveID).Scan(&total)
+	prompt := "Objective: " + desc + "\nLeads found for this objective so far: " + itoa(total) + "\nAvailable tools: search_leads, verify_email, get_statistics, reflect, complete_objective, wait\nRespond ONLY JSON: {\"action\":\"...\",\"reason\":\"...\",\"parameters\":{...}}"
 	raw := ""
 	if e.ai != nil {
 		c2, cancel := context.WithTimeout(ctx, 30*time.Second)
@@ -225,8 +264,9 @@ func (e *Engine) handleResult(ctx context.Context, objectiveID int64, action str
 					sc.Score = 0
 				}
 			}
-			_, _ = e.db.ExecContext(ctx, `INSERT OR IGNORE INTO leads(external_key,first_name,last_name,email,company_name,company_domain,position_title,linkedin_url,city,country_code,industry_name,summary,source,lead_score,score_breakdown,email_status) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, ext, fn, ln, email, comp, dom, title, li, city, cc, ind, summary, "leadscaptain", sc.Score, sc.JSON(), "unchecked")
-			if vr, err := e.registry.Execute(ctx, "verify_email", json.RawMessage(`{"email":"`+email+`"}`)); err == nil {
+			_, _ = e.db.ExecContext(ctx, `INSERT OR IGNORE INTO leads(external_key,first_name,last_name,email,company_name,company_domain,position_title,linkedin_url,city,country_code,industry_name,summary,source,lead_score,score_breakdown,email_status,objective_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, ext, fn, ln, email, comp, dom, title, li, city, cc, ind, summary, "leadscaptain", sc.Score, sc.JSON(), "unchecked", objectiveID)
+			vparams, _ := json.Marshal(map[string]string{"email": email})
+			if vr, err := e.registry.Execute(ctx, "verify_email", json.RawMessage(vparams)); err == nil {
 				bv, _ := json.Marshal(vr)
 				var vm map[string]any
 				json.Unmarshal(bv, &vm)
@@ -287,7 +327,7 @@ func (e *Engine) isComplete(ctx context.Context, objectiveID int64) bool {
 		return false
 	}
 	var qualified int
-	e.db.QueryRowContext(ctx, "SELECT count(*) FROM leads WHERE lead_score>=?", minScore).Scan(&qualified)
+	e.db.QueryRowContext(ctx, "SELECT count(*) FROM leads WHERE lead_score>=? AND objective_id=?", minScore, objectiveID).Scan(&qualified)
 	return qualified >= *target
 }
 func min(a, b int) int {
@@ -313,14 +353,36 @@ func (e *Engine) Pause(ctx context.Context, objectiveID int64) error {
 	_, err := e.db.ExecContext(ctx, "UPDATE objectives SET status='paused' WHERE id=?", objectiveID)
 	return err
 }
+
+// lastIteration returns the highest iteration number recorded for a run, so
+// a resumed loop continues after it instead of re-running or duplicating
+// iterations. In-flight (interrupted) iterations count too: the planner
+// re-decides every iteration, so skipping an interrupted plan loses nothing.
+func (e *Engine) lastIteration(ctx context.Context, runID int64) int {
+	var n sql.NullInt64
+	e.db.QueryRowContext(ctx, "SELECT MAX(iteration_number) FROM iterations WHERE run_id=?", runID).Scan(&n)
+	return int(n.Int64)
+}
+
 func (e *Engine) Resume(ctx context.Context, objectiveID int64) error {
-	_, err := e.db.ExecContext(ctx, "UPDATE objectives SET status='running' WHERE id=?", objectiveID)
-	if err == nil {
-		var runID int64
-		e.db.QueryRowContext(ctx, "SELECT id FROM agent_runs WHERE objective_id=? ORDER BY id DESC LIMIT 1", objectiveID).Scan(&runID)
-		go e.loop(runID, objectiveID)
+	var objStatus string
+	if err := e.db.QueryRowContext(ctx, "SELECT status FROM objectives WHERE id=?", objectiveID).Scan(&objStatus); err != nil {
+		return fmt.Errorf("objective %d: %w", objectiveID, err)
 	}
-	return err
+	if objStatus != "paused" {
+		return fmt.Errorf("objective %d is %s, not paused", objectiveID, objStatus)
+	}
+	var runID int64
+	if err := e.db.QueryRowContext(ctx, "SELECT id FROM agent_runs WHERE objective_id=? ORDER BY id DESC LIMIT 1", objectiveID).Scan(&runID); err != nil {
+		return fmt.Errorf("objective %d has no run to resume: %w", objectiveID, err)
+	}
+	iter := e.lastIteration(ctx, runID)
+	if _, err := e.db.ExecContext(ctx, "UPDATE objectives SET status='running' WHERE id=?", objectiveID); err != nil {
+		return err
+	}
+	e.db.ExecContext(ctx, "UPDATE agent_runs SET status='running' WHERE id=?", runID)
+	go e.loop(runID, objectiveID, iter)
+	return nil
 }
 func (e *Engine) Stop(ctx context.Context, objectiveID int64) error {
 	_, err := e.db.ExecContext(ctx, "UPDATE objectives SET status='stopped' WHERE id=?", objectiveID)
@@ -335,6 +397,6 @@ func (e *Engine) Recover(ctx context.Context) {
 	for rows.Next() {
 		var runID, objID int64
 		rows.Scan(&runID, &objID)
-		go e.loop(runID, objID)
+		go e.loop(runID, objID, e.lastIteration(ctx, runID))
 	}
 }
