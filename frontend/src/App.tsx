@@ -46,7 +46,7 @@ export default function App(){
    <ErrorBoundary><div className="min-h-screen bg-zinc-50 flex">
    <Sidebar active={tab} onChange={setTab} />
    <div className="flex-1 min-w-0 flex flex-col">
-    <Header onRefresh={refreshAll} lastUpdated={lastUpdated} />
+    <Header onRefresh={refreshAll} lastUpdated={lastUpdated} conn={state} />
     <MobileNav active={tab} onChange={setTab} />
     <main className="flex-1 p-4 md:p-6 space-y-6 overflow-auto">
      {tab==='dashboard' && (
@@ -59,7 +59,7 @@ export default function App(){
        </div>
        <AgentStatus objectives={objectives} stats={stats||{}} />
        <div className="bg-white border rounded-2xl p-4">
-        <h3 className="font-semibold mb-3">Recent Leads</h3>
+        <div className="flex items-center justify-between mb-3"><h3 className="font-semibold">Recent Leads</h3><button onClick={()=>setTab('leads')} className="text-xs text-zinc-500 hover:text-zinc-900">View all →</button></div>
         <LeadTable leads={(Array.isArray(leads)?leads:[]).slice(0,5)} loading={leadsLoading} search={search} setSearch={setSearch} onSearch={refreshLeads} />
        </div>
       </>

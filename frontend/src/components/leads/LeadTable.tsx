@@ -14,9 +14,14 @@ export function LeadTable({leads,loading,search,setSearch,onSearch}:{leads:any[]
  const [country,setCountry]=useState('')
  const [sortBy,setSortBy]=useState<'name'|'company'|'country'|'score'>('name')
  const [sortDir,setSortDir]=useState<'asc'|'desc'>('asc')
+ const [scoreBand,setScoreBand]=useState('')
  const per=25
  let filtered=Array.isArray(leads)?leads:[]
  if(country) filtered=filtered.filter((l:any)=>(l.country_code||l.country||'').toUpperCase()===country.toUpperCase())
+ if(scoreBand) filtered=filtered.filter((l:any)=>{
+  const v=l.lead_score??0
+  return scoreBand==='high'?v>=80:scoreBand==='medium'?v>=50&&v<80:v<50
+ })
  filtered=[...filtered].sort((a:any,b:any)=>{
   let va='',vb=''
   if(sortBy==='country'){va=a.country_code||'';vb=b.country_code||''}
@@ -27,17 +32,20 @@ export function LeadTable({leads,loading,search,setSearch,onSearch}:{leads:any[]
  })
  const countries=[...new Set((Array.isArray(leads)?leads:[]).map((l:any)=>l.country_code).filter(Boolean))].sort() as string[]
  const total=filtered.length
- const slice=filtered.slice((page-1)*per, page*per)
+ const pages=Math.max(1,Math.ceil(total/per))
+ const curPage=Math.min(page,pages)
+ const slice=filtered.slice((curPage-1)*per, curPage*per)
  return (
   <div className="space-y-3">
     <div className="flex flex-wrap gap-2 items-center bg-zinc-50 border rounded-xl p-2">
-     <input value={search} onChange={e=>setSearch(e.target.value)} onKeyDown={e=>e.key==='Enter'&&onSearch()} placeholder="Search name, email, company..." className="flex-1 min-w-[200px] border rounded-lg px-3 py-2 text-sm bg-white"/>
+     <input value={search} onChange={e=>{setSearch(e.target.value); setPage(1)}} onKeyDown={e=>e.key==='Enter'&&onSearch()} placeholder="Search name, email, company..." className="flex-1 min-w-[200px] border rounded-lg px-3 py-2 text-sm bg-white"/>
      <select value={country} onChange={e=>{setCountry(e.target.value); setPage(1)}} className="border rounded-lg px-3 py-2 text-sm bg-white"><option value="">All countries</option>{countries.map(c=><option key={c} value={c}>{c}</option>)}</select>
-     <select value={sortBy} onChange={e=>setSortBy(e.target.value as any)} className="border rounded-lg px-3 py-2 text-sm bg-white"><option value="name">Sort: Name</option><option value="country">Sort: Country</option><option value="company">Sort: Company</option><option value="score">Sort: Score</option></select>
-     <button onClick={()=>setSortDir(d=>d==='asc'?'desc':'asc')} className="border bg-white px-3 py-2 rounded-lg text-sm">{sortDir==='asc'?'↑':'↓'}</button>
+     <select value={scoreBand} onChange={e=>{setScoreBand(e.target.value); setPage(1)}} className="border rounded-lg px-3 py-2 text-sm bg-white"><option value="">All scores</option><option value="high">High (80+)</option><option value="medium">Medium (50-79)</option><option value="low">Low (&lt;50)</option></select>
+     <select value={sortBy} onChange={e=>{setSortBy(e.target.value as any); setPage(1)}} className="border rounded-lg px-3 py-2 text-sm bg-white"><option value="name">Sort: Name</option><option value="country">Sort: Country</option><option value="company">Sort: Company</option><option value="score">Sort: Score</option></select>
+     <button onClick={()=>{setSortDir(d=>d==='asc'?'desc':'asc'); setPage(1)}} className="border bg-white px-3 py-2 rounded-lg text-sm">{sortDir==='asc'?'↑':'↓'}</button>
      <button onClick={onSearch} className="bg-zinc-900 text-white px-4 py-2 rounded-lg text-sm">Search</button>
-     <button onClick={async()=>{if(!confirm('Clear ALL leads from database?'))return; await import('../../services/api').then(m=>m.api.clearLeads()); setSearch(''); setCountry(''); onSearch()}} className="border bg-white hover:bg-red-50 text-red-600 px-3 py-2 rounded-lg text-sm">Clear DB</button>
-     <button onClick={()=>{setSearch(''); setCountry(''); onSearch()}} className="border bg-white px-3 py-2 rounded-lg text-sm">Clear filter</button>
+     <button onClick={async()=>{if(!confirm('Clear ALL leads from database?'))return; await import('../../services/api').then(m=>m.api.clearLeads()); setSearch(''); setCountry(''); setScoreBand(''); setPage(1); onSearch()}} className="border bg-white hover:bg-red-50 text-red-600 px-3 py-2 rounded-lg text-sm">Clear DB</button>
+     <button onClick={()=>{setSearch(''); setCountry(''); setScoreBand(''); setPage(1); onSearch()}} className="border bg-white px-3 py-2 rounded-lg text-sm">Clear filter</button>
      <a href="/api/v1/leads/export" className="ml-auto bg-white border px-3 py-2 rounded-lg text-sm">Export CSV</a>
     </div>
    <div className="bg-white border rounded-xl overflow-hidden">
@@ -60,8 +68,8 @@ export function LeadTable({leads,loading,search,setSearch,onSearch}:{leads:any[]
      {!loading && (Array.isArray(slice)?slice:[]).length===0 && <EmptyState title="No leads found" desc="Try adjusting search or start an objective." />}
     </div>
     <div className="flex items-center justify-between p-3 border-t bg-zinc-50 text-xs">
-     <span>Showing {(page-1)*per+1}–{Math.min(page*per,total)} of {total}</span>
-     <div className="flex gap-1"><button disabled={page<=1} onClick={()=>setPage(p=>p-1)} className="border bg-white px-2 py-1 rounded disabled:opacity-50">Prev</button><span className="px-2 py-1">Page {page}</span><button disabled={page*per>=total} onClick={()=>setPage(p=>p+1)} className="border bg-white px-2 py-1 rounded disabled:opacity-50">Next</button></div>
+     <span>Showing {total===0?0:(curPage-1)*per+1}–{Math.min(curPage*per,total)} of {total}</span>
+     <div className="flex gap-1"><button disabled={curPage<=1} onClick={()=>setPage(p=>p-1)} className="border bg-white px-2 py-1 rounded disabled:opacity-50">Prev</button><span className="px-2 py-1">Page {curPage} of {pages}</span><button disabled={curPage>=pages} onClick={()=>setPage(p=>p+1)} className="border bg-white px-2 py-1 rounded disabled:opacity-50">Next</button></div>
     </div>
    </div>
    <Drawer open={!!sel} onClose={()=>setSel(null)} title="Lead Details">

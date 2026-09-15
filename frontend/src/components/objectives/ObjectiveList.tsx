@@ -10,10 +10,11 @@ export function ObjectiveList({objectives,refresh}:{objectives:any[],refresh:()=
   setBusy(id)
   try{
    if(action==='start') await api.startObjective(id);
+   else if(action==='resume') await api.resumeObjective(id);
    else if(action==='pause') await api.pauseObjective(id);
    else if(action==='stop') await api.stopObjective(id);
    else if(action==='delete') await api.deleteObjective(id);
-   toast(`Objective ${action}ed`); refresh()
+   toast(`Objective ${action}d`); refresh()
   }catch(e:any){ toast(e.message,'error')}
   finally{ setBusy(null); setConfirm(null)}
  }
@@ -21,12 +22,17 @@ export function ObjectiveList({objectives,refresh}:{objectives:any[],refresh:()=
   <div className="space-y-3">
    {(Array.isArray(objectives)?objectives:[]).map(o=>{
      const pct=o.progress ?? (o.target_leads ? Math.min(100, Math.round(((o.qualified ?? o.leads_discovered ?? 0))/o.target_leads*100)) : 0)
+     const paused=o.status==='paused'
     return (
      <div key={o.id} className="bg-white border rounded-2xl p-4">
       <div className="flex justify-between items-start gap-3">
-       <div className="min-w-0 flex-1"><div className="font-semibold flex items-center gap-2">{o.name} <Badge variant={o.status==='running'?'success':o.status==='completed'?'info':o.status==='failed'?'danger':'default'}>{o.status}</Badge></div><div className="text-sm text-zinc-500 truncate">{o.description}</div></div>
-        <div className="flex gap-1.5 shrink-0">
-         <button disabled={busy===o.id} onClick={()=>run(o.id,'start')} className="bg-zinc-900 text-white px-3 py-1.5 rounded-lg text-xs disabled:opacity-50">{busy===o.id?'...':'Start'}</button>
+       <div className="min-w-0 flex-1"><div className="font-semibold flex items-center gap-2 flex-wrap">{o.name} <Badge variant={o.status==='running'?'success':o.status==='completed'?'info':o.status==='failed'?'danger':paused?'warning':'default'}>{o.status}</Badge>{o.minimum_score ? <span className="text-xs text-zinc-400 font-normal">min score {o.minimum_score}</span> : null}</div><div className="text-sm text-zinc-500 truncate">{o.description}</div></div>
+        <div className="flex gap-1.5 shrink-0 flex-wrap justify-end">
+         {paused ? (
+          <button disabled={busy===o.id} onClick={()=>run(o.id,'resume')} className="bg-emerald-600 text-white px-3 py-1.5 rounded-lg text-xs disabled:opacity-50 hover:bg-emerald-700">{busy===o.id?'...':'Resume'}</button>
+         ) : (
+          <button disabled={busy===o.id || o.status==='running'} onClick={()=>run(o.id,'start')} className="bg-zinc-900 text-white px-3 py-1.5 rounded-lg text-xs disabled:opacity-50">{busy===o.id?'...':'Start'}</button>
+         )}
          <button disabled={busy===o.id} onClick={()=>setConfirm({id:o.id,action:'pause'})} className="border bg-white px-3 py-1.5 rounded-lg text-xs">Pause</button>
          <button disabled={busy===o.id} onClick={()=>setConfirm({id:o.id,action:'stop'})} className="border bg-white px-3 py-1.5 rounded-lg text-xs">Stop</button>
          <button disabled={busy===o.id} onClick={()=>setConfirm({id:o.id,action:'delete'})} className="border bg-white hover:bg-red-50 text-red-600 px-3 py-1.5 rounded-lg text-xs">Delete</button>
