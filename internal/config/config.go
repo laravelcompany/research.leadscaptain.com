@@ -27,6 +27,9 @@ type Config struct {
 	CORSOrigins   string
 	CHAPIKey      string
 	ExportDir     string
+	AuthUser      string
+	AuthPass      string
+	SessionSecret string
 }
 
 func Load() Config {
@@ -52,6 +55,9 @@ func Load() Config {
 		CORSOrigins:   env("CORS_ALLOWED_ORIGINS", "*"),
 		CHAPIKey:      os.Getenv("COMPANIES_HOUSE_API_KEY"),
 		ExportDir:     env("EXPORT_DIR", "./data/exports"),
+		AuthUser:      os.Getenv("AUTH_USERNAME"),
+		AuthPass:      os.Getenv("AUTH_PASSWORD"),
+		SessionSecret: os.Getenv("AUTH_SESSION_SECRET"),
 	}
 }
 func env(k, d string) string {

@@ -1,4 +1,4 @@
-export function Header({onRefresh,lastUpdated,conn}:{onRefresh:()=>void,lastUpdated:string,conn?:string}){
+export function Header({onRefresh,lastUpdated,conn,authUser,onLogout}:{onRefresh:()=>void,lastUpdated:string,conn?:string,authUser?:string,onLogout?:()=>void}){
  const dot:any={connected:'bg-emerald-500',connecting:'bg-amber-500',reconnecting:'bg-amber-500 animate-pulse',disconnected:'bg-red-500'}
  return (
   <header className="sticky top-0 z-10 bg-white/80 backdrop-blur border-b">
@@ -8,6 +8,7 @@ export function Header({onRefresh,lastUpdated,conn}:{onRefresh:()=>void,lastUpda
     <div className="hidden sm:block text-xs text-zinc-400">{lastUpdated}</div>
     <button onClick={onRefresh} className="border bg-white px-3 py-1.5 rounded-lg text-xs font-medium hover:bg-zinc-50">↻ Refresh</button>
     <a href="/api/v1/leads/export" className="bg-emerald-600 text-white px-3 py-1.5 rounded-lg text-xs font-medium hover:bg-emerald-700">Export CSV</a>
+    {authUser && <button onClick={onLogout} title={`Signed in as ${authUser}`} className="border bg-white px-3 py-1.5 rounded-lg text-xs font-medium hover:bg-zinc-50 text-zinc-600">Sign out</button>}
    </div>
   </header>
  )

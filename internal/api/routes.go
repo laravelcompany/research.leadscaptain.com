@@ -19,7 +19,7 @@ import (
 	"research-leads/internal/events"
 )
 
-func Router(db *sql.DB, bus *events.Bus, engine *agent.Engine, corsOrigins, apiKey string, verifier *emailvalidator.Client) http.Handler {
+func Router(db *sql.DB, bus *events.Bus, engine *agent.Engine, corsOrigins, apiKey string, verifier *emailvalidator.Client, auth *handlers.AuthConfig) http.Handler {
 	r := chi.NewRouter()
 	r.Use(func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
@@ -41,14 +41,15 @@ func Router(db *sql.DB, bus *events.Bus, engine *agent.Engine, corsOrigins, apiK
 		}
 	}
 	r.Use(cors.Handler(cors.Options{AllowedOrigins: origins, AllowedMethods: []string{"GET", "POST", "PATCH", "DELETE", "OPTIONS"}, AllowedHeaders: []string{"*"}}))
-	r.Use(middleware.APIKey(apiKey))
+	r.Use(middleware.APIKey(apiKey, auth.Secret))
+	r.Use(middleware.Session(auth.User, auth.Pass, auth.Secret, apiKey))
 	r.Use(func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 			fmt.Printf("{\"time\":\"%s\",\"level\":\"DEBUG\",\"msg\":\"request\",\"method\":\"%s\",\"path\":\"%s\",\"query\":\"%s\"}\n", time.Now().Format(time.RFC3339), req.Method, req.URL.Path, req.URL.RawQuery)
 			next.ServeHTTP(w, req)
 		})
 	})
-	s := &handlers.Server{DB: db, Bus: bus, Engine: engine}
+	s := &handlers.Server{DB: db, Bus: bus, Engine: engine, Auth: auth}
 	if verifier != nil {
 		s.VerifyEmail = func(ctx context.Context, email string) (string, error) {
 			res, err := verifier.Verify(ctx, email)
@@ -59,6 +60,9 @@ func Router(db *sql.DB, bus *events.Bus, engine *agent.Engine, corsOrigins, apiK
 	r.Get("/health/live", s.Health)
 	r.Get("/health/ready", s.Health)
 	r.Get("/metrics", s.Metrics)
+	r.Post("/api/v1/auth/login", s.Login)
+	r.Get("/api/v1/auth/me", s.Me)
+	r.Post("/api/v1/auth/logout", s.Logout)
 	r.Get("/api/v1/events", s.Events)
 	r.Route("/api/v1", func(r chi.Router) {
 		r.Get("/objectives", s.Objectives)

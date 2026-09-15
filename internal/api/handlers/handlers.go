@@ -23,6 +23,8 @@ type Server struct {
 	// VerifyEmail verifies one address and returns its status (e.g. "valid",
 	// "invalid", "unknown"). May be nil when no validator is configured.
 	VerifyEmail func(ctx context.Context, email string) (string, error)
+	// Auth carries the UI login configuration (env-supplied credentials).
+	Auth *AuthConfig
 }
 
 func (s *Server) Objectives(w http.ResponseWriter, r *http.Request) {
