@@ -56,7 +56,9 @@ empty the login screen is disabled and the app behaves as before.
 - `POST /api/v1/auth/logout` - clears the cookie.
 - API clients keep using `Authorization: Bearer $APP_API_KEY` untouched; a
   valid UI session cookie also satisfies the `APP_API_KEY` gate so the UI
-  works when both are configured. Health and metrics endpoints stay open.
+  works when both are configured. The gate applies to `/api/*` routes only:
+  the SPA, its static assets and the index.html fallback stay public so the
+  login screen can load. Health and metrics endpoints stay open.
 - `AUTH_SESSION_SECRET` optionally overrides the cookie-signing key (default
   is derived from the credentials, so sessions survive restarts but are
   invalidated when credentials change).
