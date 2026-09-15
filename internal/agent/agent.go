@@ -350,7 +350,7 @@ func (e *Engine) generateIntros(leads []pendingLead) {
 		pl := ld
 		go func() {
 			defer func() { <-sem }()
-			prompt := "Write a short LinkedIn connection request (max 300 chars), friendly, personalized for " + pl.FirstName + " " + pl.LastName + ", " + pl.Title + " at " + pl.Company + " (" + pl.Country + "/" + pl.City + "). Summary: " + pl.Summary + "."
+			prompt := buildOutreachPrompt(pl)
 			msg := ""
 			if e.ai != nil {
 				ctx2, cancel := context.WithTimeout(context.Background(), 20*time.Second)
