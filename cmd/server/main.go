@@ -12,6 +12,7 @@ import (
 	"research-leads/internal/agent"
 	"research-leads/internal/ai"
 	"research-leads/internal/api"
+	"research-leads/internal/companyreg"
 	"research-leads/internal/config"
 	"research-leads/internal/db"
 	"research-leads/internal/emailvalidator"
@@ -38,6 +39,14 @@ func main() {
 	reg.Register(tools.NewSearch(lc))
 	reg.Register(tools.NewVerify(ev))
 	reg.Register(tools.NewStats(database))
+	reg.Register(tools.NewGetLead(database))
+	reg.Register(tools.NewListLeads(database))
+	reg.Register(tools.NewScoreLead(database))
+	reg.Register(tools.NewExportLeads(database, cfg.ExportDir))
+	reg.Register(tools.NewCheckWebsite())
+	reg.Register(tools.NewCheckDomain())
+	reg.Register(tools.NewCompanyLookup(companyreg.New(cfg.CHAPIKey, cfg.APITimeout)))
+	reg.Register(tools.NewFindEmail(ev))
 	engine := agent.New(database, aiClient, reg, bus, logger, cfg.MaxIterations)
 	engine.Recover(context.Background())
 	handler := api.Router(database, bus, engine, cfg.CORSOrigins, cfg.AppAPIKey, ev)

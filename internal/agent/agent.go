@@ -110,7 +110,7 @@ func (e *Engine) loop(runID, objectiveID int64, startIter int) {
 		action, prompt, rawAI := e.plan(ctx, objectiveID)
 		e.log.Info("planned", "run_id", runID, "iter", i+1, "action", action.Action, "reason", action.Reason, "prompt_len", len(prompt))
 		e.log.Debug("ai raw", "raw", rawAI[:min(500, len(rawAI))])
-		allowed := []string{"search_leads", "verify_email", "get_statistics", "reflect", "complete_objective", "wait"}
+		allowed := append(e.registry.Names(), "reflect", "complete_objective", "wait")
 		valid := false
 		for _, a := range allowed {
 			if a == action.Action {
@@ -137,7 +137,7 @@ func (e *Engine) loop(runID, objectiveID int64, startIter int) {
 				result = res
 				b, _ := json.Marshal(result)
 				e.log.Info("tool success", "action", action.Action, "result_len", len(b))
-				e.handleResult(ctx, objectiveID, action.Action, result)
+				e.handleResult(ctx, objectiveID, action.Action, action.Parameters, result)
 				e.db.ExecContext(ctx, "UPDATE iterations SET action=?, action_result=?, reflection=?, status='completed', completed_at=CURRENT_TIMESTAMP WHERE id=?", action.Action, string(b), action.Reason, iterID)
 				e.bus.Publish(events.Event{Type: "api.response", Payload: map[string]any{"iteration_id": iterID, "action": action.Action, "result": string(b)}})
 			}
@@ -171,10 +171,13 @@ func (e *Engine) loop(runID, objectiveID int64, startIter int) {
 func (e *Engine) plan(ctx context.Context, objectiveID int64) (Action, string, string) {
 	var target *int
 	var desc string
-	e.db.QueryRowContext(ctx, "SELECT target_leads, description FROM objectives WHERE id=?", objectiveID).Scan(&target, &desc)
-	var total int
+	var minScore int
+	e.db.QueryRowContext(ctx, "SELECT target_leads, description, minimum_score FROM objectives WHERE id=?", objectiveID).Scan(&target, &desc, &minScore)
+	var total, qualified int
 	e.db.QueryRowContext(ctx, "SELECT count(*) FROM leads WHERE objective_id=?", objectiveID).Scan(&total)
-	prompt := "Objective: " + desc + "\nLeads found for this objective so far: " + itoa(total) + "\nAvailable tools: search_leads, verify_email, get_statistics, reflect, complete_objective, wait\nRespond ONLY JSON: {\"action\":\"...\",\"reason\":\"...\",\"parameters\":{...}}"
+	e.db.QueryRowContext(ctx, "SELECT count(*) FROM leads WHERE objective_id=? AND lead_score>=?", objectiveID, minScore).Scan(&qualified)
+	recent := e.recentQueries(ctx, objectiveID)
+	prompt := BuildPrompt(desc, target, total, qualified, minScore, e.registry.Describe(), recent)
 	raw := ""
 	if e.ai != nil {
 		c2, cancel := context.WithTimeout(ctx, 30*time.Second)
@@ -192,7 +195,8 @@ func (e *Engine) plan(ctx context.Context, objectiveID int64) (Action, string, s
 		}
 	}
 	if target != nil && total < *target {
-		b, _ := json.Marshal(map[string]any{"q": "CTO", "country_code": "GB", "city": "London"})
+		q, cc, city, ind := DeriveSearchParams(desc)
+		b, _ := json.Marshal(map[string]any{"q": q, "country_code": cc, "city": city, "industry": ind})
 		if raw == "" {
 			raw = "fallback heuristic (no AI)"
 		}
@@ -201,7 +205,25 @@ func (e *Engine) plan(ctx context.Context, objectiveID int64) (Action, string, s
 	return Action{Action: "complete_objective", Reason: "Target reached"}, prompt, raw
 }
 
-func (e *Engine) handleResult(ctx context.Context, objectiveID int64, action string, result any) {
+// recentQueries returns the last few search queries run for an objective so
+// the planner can avoid repeating itself.
+func (e *Engine) recentQueries(ctx context.Context, objectiveID int64) []string {
+	rows, err := e.db.QueryContext(ctx, "SELECT query FROM search_history WHERE objective_id=? ORDER BY id DESC LIMIT 5", objectiveID)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var q string
+		if rows.Scan(&q) == nil {
+			out = append(out, q)
+		}
+	}
+	return out
+}
+
+func (e *Engine) handleResult(ctx context.Context, objectiveID int64, action string, params json.RawMessage, result any) {
 	e.log.Debug("handleResult", "action", action, "objective", objectiveID)
 	if action == "search_leads" {
 		b, _ := json.Marshal(result)
@@ -218,6 +240,12 @@ func (e *Engine) handleResult(ctx context.Context, objectiveID int64, action str
 				if v, ok := l["ID"].(string); ok {
 					ext = v
 				}
+			}
+			// Providers occasionally return leads without an id; the email is
+			// the natural dedupe key, otherwise every id-less lead after the
+			// first is silently dropped by the UNIQUE(external_key) constraint.
+			if ext == "" {
+				ext = "email:" + email
 			}
 			fn, _ := l["first_name"].(string)
 			if fn == "" {
@@ -265,8 +293,12 @@ func (e *Engine) handleResult(ctx context.Context, objectiveID int64, action str
 				}
 			}
 			_, _ = e.db.ExecContext(ctx, `INSERT OR IGNORE INTO leads(external_key,first_name,last_name,email,company_name,company_domain,position_title,linkedin_url,city,country_code,industry_name,summary,source,lead_score,score_breakdown,email_status,objective_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, ext, fn, ln, email, comp, dom, title, li, city, cc, ind, summary, "leadscaptain", sc.Score, sc.JSON(), "unchecked", objectiveID)
+			// Skip re-verification when this email already carries a verdict;
+			// verification calls cost money or rate budget on real providers.
+			var existingStatus string
+			e.db.QueryRowContext(ctx, "SELECT COALESCE(email_status,'') FROM leads WHERE email=? AND email_status IS NOT NULL AND email_status!='unchecked' LIMIT 1", email).Scan(&existingStatus)
 			vparams, _ := json.Marshal(map[string]string{"email": email})
-			if vr, err := e.registry.Execute(ctx, "verify_email", json.RawMessage(vparams)); err == nil {
+			if vr, err := e.registry.Execute(ctx, "verify_email", json.RawMessage(vparams)); err == nil && existingStatus == "" {
 				bv, _ := json.Marshal(vr)
 				var vm map[string]any
 				json.Unmarshal(bv, &vm)
@@ -286,7 +318,21 @@ func (e *Engine) handleResult(ctx context.Context, objectiveID int64, action str
 			pend = append(pend, pendingLead{Email: email, FirstName: fn, LastName: ln, Company: comp, Title: title, Summary: summary, City: city, Country: cc})
 		}
 		if len(leads) > 0 {
-			e.db.ExecContext(ctx, "INSERT INTO search_history(objective_id,query,result_count) VALUES(?,?,?)", objectiveID, "search", len(leads))
+			// Record the actual query so the planner can avoid repeats and the
+			// UI shows what was tried, not the literal string "search".
+			qText := string(params)
+			var sp map[string]any
+			if json.Unmarshal(params, &sp) == nil {
+				if qv, ok := sp["q"].(string); ok && qv != "" {
+					qText = qv
+					for _, k := range []string{"industry", "city", "country_code"} {
+						if v, ok := sp[k].(string); ok && v != "" {
+							qText += " " + v
+						}
+					}
+				}
+			}
+			e.db.ExecContext(ctx, "INSERT INTO search_history(objective_id,query,result_count) VALUES(?,?,?)", objectiveID, qText, len(leads))
 		}
 		e.log.Info("leads inserted", "count", len(leads), "pend", len(pend))
 		e.bus.Publish(events.Event{Type: "lead.created", Payload: map[string]any{"count": len(leads)}})
@@ -305,10 +351,16 @@ func (e *Engine) generateIntros(leads []pendingLead) {
 		go func() {
 			defer func() { <-sem }()
 			prompt := "Write a short LinkedIn connection request (max 300 chars), friendly, personalized for " + pl.FirstName + " " + pl.LastName + ", " + pl.Title + " at " + pl.Company + " (" + pl.Country + "/" + pl.City + "). Summary: " + pl.Summary + "."
-			ctx2, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-			msg, err := e.ai.Chat(ctx2, prompt, false)
-			cancel()
-			if err != nil || msg == "" {
+			msg := ""
+			if e.ai != nil {
+				ctx2, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+				out, err := e.ai.Chat(ctx2, prompt, false)
+				cancel()
+				if err == nil {
+					msg = out
+				}
+			}
+			if msg == "" {
 				msg = "Hi " + pl.FirstName + ", I came across your profile at " + pl.Company + " and was impressed by your work as " + pl.Title + ". Would love to connect and share ideas."
 			}
 			if len(msg) > 500 {
