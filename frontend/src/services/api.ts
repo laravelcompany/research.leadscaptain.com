@@ -29,7 +29,7 @@ export const api={
   leads:(params:Record<string,string>={})=>{
    const clean:Record<string,string>={}; for(const [k,v] of Object.entries(params)) if(v) clean[k]=v
    const q=new URLSearchParams(clean).toString()
-   return apiFetch<{data:any[],page:number,per_page:number}>('/api/v1/leads'+(q?'?'+q:''))
+   return apiFetch<{data:any[],page:number,per_page:number,total:number,last_page:number}>('/api/v1/leads'+(q?'?'+q:''))
  },
  objectives:()=>apiFetch<any[]>('/api/v1/objectives'),
  createObjective:(body:any)=>apiFetch<any>('/api/v1/objectives',{method:'POST',body:JSON.stringify(body)}),

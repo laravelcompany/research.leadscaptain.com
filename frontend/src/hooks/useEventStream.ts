@@ -1,34 +1,26 @@
 import { useEffect, useRef, useState } from 'react'
 export type ConnState='connecting'|'connected'|'disconnected'|'reconnecting'
-export function useEventStream(onEvent:(e:any)=>void){
+export function useEventStream(onEvent:(e:any)=>void, objectiveId?:string){
  const [events,setEvents]=useState<any[]>([])
  const [state,setState]=useState<ConnState>('connecting')
- const esRef=useRef<EventSource|null>(null)
+ const callback=useRef(onEvent); callback.current=onEvent
  const retryRef=useRef(0)
  useEffect(()=>{
-  let closed=false
-  let timer:any
+  let closed=false; let timer:number|undefined; let es:EventSource|undefined
+  setEvents([]); retryRef.current=0
   const connect=()=>{
    if(closed) return
    setState(retryRef.current===0?'connecting':'reconnecting')
-   const es=new EventSource('/api/v1/events')
-   esRef.current=es
-   es.onopen=()=>{ setState('connected'); retryRef.current=0}
+   const q=objectiveId?`?objective_id=${encodeURIComponent(objectiveId)}`:''
+   es=new EventSource('/api/v1/events'+q)
+   es.onopen=()=>{setState('connected');retryRef.current=0}
    es.onmessage=e=>{
-    try{ const d=JSON.parse(e.data); setEvents(p=>[d,...p].slice(0,200)); onEvent(d)}catch{ setEvents(p=>[e.data,...p].slice(0,200))}
+    try{const d=JSON.parse(e.data);setEvents(p=>[d,...p].slice(0,500));callback.current(d)}catch{}
    }
-   es.onerror=()=>{
-    es.close(); setState('disconnected')
-    if(closed) return
-    retryRef.current++
-    const delay=Math.min(30000, 1000*Math.pow(1.5, retryRef.current))
-    timer=setTimeout(connect, delay)
-   }
+   es.onerror=()=>{es.close();if(closed)return;setState('disconnected');retryRef.current++;timer=window.setTimeout(connect,Math.min(30000,1000*Math.pow(1.5,retryRef.current)))}
   }
   connect()
-  return()=>{ closed=true; clearTimeout(timer); esRef.current?.close()}
- },[])
- const clear=()=>setEvents([])
- const pause=()=>esRef.current?.close()
- return {events,state,clear,pause}
+  return()=>{closed=true;if(timer)clearTimeout(timer);es?.close()}
+ },[objectiveId])
+ return {events,state,clear:()=>setEvents([])}
 }

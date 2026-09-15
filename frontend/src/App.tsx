@@ -14,11 +14,16 @@ import { IterationCard } from './components/interrogation/IterationCard'
 import { EventStream } from './components/events/EventStream'
 import { ToastContainer, toast } from './components/ui/Toast'
 import { ErrorBoundary } from './components/ui/ErrorBoundary'
+import { ObjectiveLeadsPage } from './components/objectives/ObjectiveLeadsPage'
+import { BrowserRouter, useLocation, useNavigate } from 'react-router-dom'
 
-export default function App(){
+function Application(){
+ const location=useLocation(); const navigate=useNavigate()
  const [authState,setAuthState]=useState<'loading'|'login'|'ready'>('loading')
  const [authUser,setAuthUser]=useState('')
- const [tab,setTab]=useState('dashboard')
+ const initialPath=location.pathname
+ const [tab,setTabState]=useState(initialPath==='/objectives'?'objectives':initialPath==='/leads'?'leads':initialPath==='/runs'?'runs':initialPath==='/interrogation'?'interrogation':initialPath==='/events'?'live':'dashboard')
+ const setTab=(next:string)=>{setTabState(next);navigate(next==='dashboard'?'/':next==='live'?'/events':'/'+next)}
  const [stats,setStats]=useState<any>(null)
  const [statsLoading,setStatsLoading]=useState(true)
  const [objectives,setObjectives]=useState<any[]>([])
@@ -58,13 +63,15 @@ export default function App(){
   if(authState==='loading') return <div className="min-h-screen bg-zinc-50 flex items-center justify-center text-sm text-zinc-400">Loading...</div>
   if(authState==='login') return <><LoginScreen onLogin={(u)=>{ setAuthUser(u); setAuthState('ready') }} /><ToastContainer /></>
 
-  return (
+ const objectiveMatch=location.pathname.match(/^\/objectives\/([^/]+)\/leads\/?$/)
+ return (
    <ErrorBoundary><div className="min-h-screen bg-zinc-50 flex">
-   <Sidebar active={tab} onChange={setTab} />
+   <Sidebar active={objectiveMatch?'objectives':tab} onChange={setTab} />
    <div className="flex-1 min-w-0 flex flex-col">
     <Header onRefresh={refreshAll} lastUpdated={lastUpdated} conn={state} authUser={authUser} onLogout={logout} />
-    <MobileNav active={tab} onChange={setTab} />
+    <MobileNav active={objectiveMatch?'objectives':tab} onChange={setTab} />
     <main className="flex-1 p-4 md:p-6 space-y-6 overflow-auto">
+     {objectiveMatch ? <ObjectiveLeadsPage id={objectiveMatch[1]} onBack={()=>{setTabState('objectives');navigate('/objectives')}} /> : <>
      {tab==='dashboard' && (
       <>
        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
@@ -84,7 +91,7 @@ export default function App(){
      {tab==='objectives' && (
       <div className="space-y-3">
        <div className="flex justify-between items-center"><h2 className="font-bold text-lg">Objectives</h2><button onClick={()=>setModalOpen(true)} className="bg-zinc-900 text-white px-4 py-2 rounded-xl text-sm">+ New Objective</button></div>
-       <ObjectiveList objectives={objectives} refresh={refreshObjectives} />
+       <ObjectiveList objectives={objectives} refresh={refreshObjectives} onOpen={id=>navigate(`/objectives/${id}/leads`)} />
       </div>
      )}
      {tab==='runs' && <RunList iterations={iters} />}
@@ -96,6 +103,7 @@ export default function App(){
       </div>
      )}
      {tab==='live' && <EventStream events={events} state={state} clear={clear} />}
+     </>}
     </main>
    </div>
    <ObjectiveModal open={modalOpen} onClose={()=>setModalOpen(false)} onCreated={()=>{ refreshObjectives(); setTab('objectives'); toast('Objective created — showing Objectives'); }} />
@@ -103,3 +111,5 @@ export default function App(){
    </div></ErrorBoundary>
   )
 }
+
+export default function App(){ return <BrowserRouter><Application/></BrowserRouter> }

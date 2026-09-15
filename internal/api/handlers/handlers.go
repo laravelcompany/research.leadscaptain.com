@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/csv"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -28,43 +29,32 @@ type Server struct {
 }
 
 func (s *Server) Objectives(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
 	switch r.Method {
 	case "GET":
-		var total int
-		s.DB.QueryRow("SELECT count(*) FROM leads").Scan(&total)
-		rows, _ := s.DB.Query("SELECT id,name,description,status,target_leads,minimum_score,iteration_count FROM objectives ORDER BY id DESC")
-		type tmp struct {
-			id       int64
-			n, d, st string
-			tl       sql.NullInt64
-			ms, iter int
+		rows, err := s.DB.Query(`SELECT o.id,o.name,o.description,o.status,o.target_leads,o.minimum_score,o.iteration_count,
+			COUNT(l.id), COALESCE(SUM(CASE WHEN l.lead_score>=o.minimum_score THEN 1 ELSE 0 END),0)
+			FROM objectives o LEFT JOIN leads l ON l.objective_id=o.id
+			GROUP BY o.id ORDER BY o.id DESC`)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
 		}
-		var tmps []tmp
-		if rows != nil {
-			for rows.Next() {
-				var id int64
-				var n, d, st string
-				var tl sql.NullInt64
-				var ms int
-				var iterNull sql.NullInt64
-				rows.Scan(&id, &n, &d, &st, &tl, &ms, &iterNull)
-				iter := 0
-				if iterNull.Valid {
-					iter = int(iterNull.Int64)
-				}
-				tmps = append(tmps, tmp{id, n, d, st, tl, ms, iter})
+		defer rows.Close()
+		out := []map[string]any{}
+		for rows.Next() {
+			var id int64
+			var name, description, status string
+			var target sql.NullInt64
+			var minimum, iterations, discovered, qualified int
+			if err := rows.Scan(&id, &name, &description, &status, &target, &minimum, &iterations, &discovered, &qualified); err != nil {
+				continue
 			}
-			rows.Close()
-		}
-		var out []map[string]any
-		for _, t := range tmps {
-			var qualified int
-			s.DB.QueryRow("SELECT count(*) FROM leads WHERE lead_score>=?", t.ms).Scan(&qualified)
-			m := map[string]any{"id": t.id, "name": t.n, "description": t.d, "status": t.st, "minimum_score": t.ms, "iteration_count": t.iter, "leads_discovered": total, "qualified": qualified}
-			if t.tl.Valid {
-				m["target_leads"] = t.tl.Int64
-				if t.tl.Int64 > 0 {
-					pct := qualified * 100 / int(t.tl.Int64)
+			m := map[string]any{"id": id, "name": name, "description": description, "status": status, "minimum_score": minimum, "iteration_count": iterations, "leads_discovered": discovered, "qualified": qualified}
+			if target.Valid {
+				m["target_leads"] = target.Int64
+				if target.Int64 > 0 {
+					pct := qualified * 100 / int(target.Int64)
 					if pct > 100 {
 						pct = 100
 					}
@@ -73,10 +63,6 @@ func (s *Server) Objectives(w http.ResponseWriter, r *http.Request) {
 			}
 			out = append(out, m)
 		}
-		if out == nil {
-			out = []map[string]any{}
-		}
-		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(out)
 	case "POST":
 		var body struct {
@@ -85,40 +71,73 @@ func (s *Server) Objectives(w http.ResponseWriter, r *http.Request) {
 			TargetLeads  *int   `json:"target_leads"`
 			MinimumScore int    `json:"minimum_score"`
 		}
-		json.NewDecoder(r.Body).Decode(&body)
-		if body.Name == "" {
-			body.Name = "Objective"
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid JSON")
+			return
 		}
-		res, _ := s.DB.Exec("INSERT INTO objectives(name,description,status,target_leads,minimum_score) VALUES(?,?,'idle',?,?)", body.Name, body.Description, body.TargetLeads, body.MinimumScore)
+		if strings.TrimSpace(body.Name) == "" {
+			writeError(w, http.StatusBadRequest, "name is required")
+			return
+		}
+		res, err := s.DB.Exec("INSERT INTO objectives(name,description,status,target_leads,minimum_score) VALUES(?,?,'idle',?,?)", body.Name, body.Description, body.TargetLeads, body.MinimumScore)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
 		id, _ := res.LastInsertId()
+		w.WriteHeader(http.StatusCreated)
 		json.NewEncoder(w).Encode(map[string]any{"id": id, "name": body.Name, "status": "idle"})
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
 	}
 }
 
+func writeError(w http.ResponseWriter, status int, message string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(map[string]any{"error": map[string]string{"message": message}})
+}
+
 func (s *Server) ObjectiveByID(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	if _, err := strconv.ParseInt(id, 10, 64); err != nil {
+		writeError(w, http.StatusNotFound, "objective not found")
+		return
+	}
 	if r.Method == "DELETE" {
-		id := chi.URLParam(r, "id")
+		var exists int
+		if err := s.DB.QueryRow("SELECT 1 FROM objectives WHERE id=?", id).Scan(&exists); err != nil {
+			writeError(w, http.StatusNotFound, "objective not found")
+			return
+		}
 		s.DB.Exec("DELETE FROM iterations WHERE run_id IN (SELECT id FROM agent_runs WHERE objective_id=?)", id)
 		s.DB.Exec("DELETE FROM agent_runs WHERE objective_id=?", id)
 		s.DB.Exec("DELETE FROM search_history WHERE objective_id=?", id)
 		s.DB.Exec("DELETE FROM objectives WHERE id=?", id)
-		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]any{"deleted": id})
 		return
 	}
-	id := chi.URLParam(r, "id")
-	var n, d, st string
-	var tl sql.NullInt64
-	var ms int
-	err := s.DB.QueryRow("SELECT name,description,status,target_leads,minimum_score FROM objectives WHERE id=?", id).Scan(&n, &d, &st, &tl, &ms)
-	if err != nil {
-		http.Error(w, `{"error":"not found"}`, 404)
+	var name, description, status string
+	var target sql.NullInt64
+	var minimum, iterations int
+	if err := s.DB.QueryRow("SELECT name,description,status,target_leads,minimum_score,iteration_count FROM objectives WHERE id=?", id).Scan(&name, &description, &status, &target, &minimum, &iterations); err != nil {
+		writeError(w, http.StatusNotFound, "objective not found")
 		return
 	}
-	m := map[string]any{"id": id, "name": n, "description": d, "status": st, "minimum_score": ms}
-	if tl.Valid {
-		m["target_leads"] = tl.Int64
+	var discovered, qualified int
+	s.DB.QueryRow("SELECT count(*),COALESCE(SUM(CASE WHEN lead_score>=? THEN 1 ELSE 0 END),0) FROM leads WHERE objective_id=?", minimum, id).Scan(&discovered, &qualified)
+	m := map[string]any{"id": id, "name": name, "description": description, "status": status, "minimum_score": minimum, "iteration_count": iterations, "leads_discovered": discovered, "qualified": qualified}
+	if target.Valid {
+		m["target_leads"] = target.Int64
+		if target.Int64 > 0 {
+			pct := qualified * 100 / int(target.Int64)
+			if pct > 100 {
+				pct = 100
+			}
+			m["progress"] = pct
+		}
 	}
+	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(m)
 }
 
@@ -126,7 +145,7 @@ func (s *Server) StartObjective(w http.ResponseWriter, r *http.Request) {
 	id, _ := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
 	runID, err := s.Engine.Start(r.Context(), id)
 	if err != nil {
-		http.Error(w, err.Error(), 500)
+		writeError(w, http.StatusConflict, err.Error())
 		return
 	}
 	json.NewEncoder(w).Encode(map[string]any{"run_id": runID})
@@ -134,25 +153,28 @@ func (s *Server) StartObjective(w http.ResponseWriter, r *http.Request) {
 func (s *Server) PauseObjective(w http.ResponseWriter, r *http.Request) {
 	id, _ := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
 	if err := s.Engine.Pause(r.Context(), id); err != nil {
-		http.Error(w, `{"error":"`+err.Error()+`"}`, 409)
+		writeError(w, http.StatusConflict, err.Error())
 		return
 	}
+	s.Bus.Publish(events.Event{Type: "agent.paused", Payload: map[string]any{"objective_id": id}})
 	json.NewEncoder(w).Encode(map[string]any{"status": "paused"})
 }
 func (s *Server) ResumeObjective(w http.ResponseWriter, r *http.Request) {
 	id, _ := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
 	if err := s.Engine.Resume(r.Context(), id); err != nil {
-		http.Error(w, `{"error":"`+err.Error()+`"}`, 409)
+		writeError(w, http.StatusConflict, err.Error())
 		return
 	}
+	s.Bus.Publish(events.Event{Type: "agent.resumed", Payload: map[string]any{"objective_id": id}})
 	json.NewEncoder(w).Encode(map[string]any{"status": "running"})
 }
 func (s *Server) StopObjective(w http.ResponseWriter, r *http.Request) {
 	id, _ := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
 	if err := s.Engine.Stop(r.Context(), id); err != nil {
-		http.Error(w, `{"error":"`+err.Error()+`"}`, 409)
+		writeError(w, http.StatusConflict, err.Error())
 		return
 	}
+	s.Bus.Publish(events.Event{Type: "agent.stopped", Payload: map[string]any{"objective_id": id}})
 	json.NewEncoder(w).Encode(map[string]any{"status": "stopped"})
 }
 
@@ -160,46 +182,98 @@ func (s *Server) Leads(w http.ResponseWriter, r *http.Request) {
 	if r.Method == "DELETE" {
 		s.DB.Exec("DELETE FROM leads")
 		s.DB.Exec("DELETE FROM search_history")
-		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]any{"deleted": true})
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
 	q := r.URL.Query()
 	page, _ := strconv.Atoi(q.Get("page"))
 	if page < 1 {
 		page = 1
 	}
 	per, _ := strconv.Atoi(q.Get("per_page"))
-	if per < 1 || per > 250 {
+	if per < 1 || per > 100 {
 		per = 25
 	}
-	offset := (page - 1) * per
-	search := q.Get("search")
-	query := "SELECT id,first_name,last_name,email,company_name,position_title,lead_score,linkedin_url,company_domain,city,country_code,industry_name,email_status,summary,outreach_message FROM leads WHERE 1=1"
+	where := []string{"1=1"}
 	args := []any{}
-	if search != "" {
-		query += " AND (first_name LIKE ? OR last_name LIKE ? OR email LIKE ? OR company_name LIKE ?)"
-		like := "%" + search + "%"
-		args = append(args, like, like, like, like)
+	if v := q.Get("objective_id"); v != "" {
+		if _, err := strconv.ParseInt(v, 10, 64); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid objective_id")
+			return
+		}
+		where = append(where, "objective_id=?")
+		args = append(args, v)
 	}
-	query += " ORDER BY id DESC LIMIT ? OFFSET ?"
-	args = append(args, per, offset)
-	rows, _ := s.DB.Query(query, args...)
-	var out []map[string]any
-	if rows != nil {
-		defer rows.Close()
-		for rows.Next() {
-			var id, score int64
-			var fn, ln, email, comp, title, li, dom, city, cc, ind, es, sum, outmsg sql.NullString
-			rows.Scan(&id, &fn, &ln, &email, &comp, &title, &score, &li, &dom, &city, &cc, &ind, &es, &sum, &outmsg)
-			out = append(out, map[string]any{"id": id, "first_name": fn.String, "last_name": ln.String, "email": email.String, "company_name": comp.String, "position_title": title.String, "lead_score": score, "linkedin_url": li.String, "company_domain": dom.String, "city": city.String, "country_code": cc.String, "industry_name": ind.String, "email_status": es.String, "summary": sum.String, "outreach_message": outmsg.String})
+	if v := strings.TrimSpace(q.Get("search")); v != "" {
+		where = append(where, "(first_name LIKE ? OR last_name LIKE ? OR full_name LIKE ? OR email LIKE ? OR company_name LIKE ? OR company_domain LIKE ? OR city LIKE ?)")
+		like := "%" + v + "%"
+		for range 7 {
+			args = append(args, like)
 		}
 	}
-	if out == nil {
-		out = []map[string]any{}
+	if v := q.Get("country"); v != "" {
+		where = append(where, "country_code=?")
+		args = append(args, v)
 	}
-	json.NewEncoder(w).Encode(map[string]any{"data": out, "page": page, "per_page": per})
+	if v := q.Get("status"); v != "" {
+		where = append(where, "status=?")
+		args = append(args, v)
+	}
+	if v := q.Get("source"); v != "" {
+		where = append(where, "source=?")
+		args = append(args, v)
+	}
+	if v := q.Get("min_score"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid min_score")
+			return
+		}
+		where = append(where, "lead_score>=?")
+		args = append(args, n)
+	}
+	clause := strings.Join(where, " AND ")
+	var total int
+	if err := s.DB.QueryRow("SELECT count(*) FROM leads WHERE "+clause, args...).Scan(&total); err != nil {
+		writeError(w, 500, err.Error())
+		return
+	}
+	sortColumns := map[string]string{"created_at": "created_at", "updated_at": "updated_at", "name": "COALESCE(full_name,first_name || ' ' || last_name)", "company": "company_name", "score": "lead_score", "status": "status", "source": "source"}
+	sort := sortColumns[q.Get("sort")]
+	if sort == "" {
+		sort = "created_at"
+	}
+	dir := "DESC"
+	if strings.EqualFold(q.Get("direction"), "asc") {
+		dir = "ASC"
+	}
+	query := `SELECT id,objective_id,external_key,first_name,last_name,full_name,email,email_status,phone,company_name,company_domain,position_title,department,industry_name,country_code,country_name,city,linkedin_url,website_url,lead_score,score_breakdown,source,raw_data,status,summary,outreach_message,created_at,updated_at FROM leads WHERE ` + clause + " ORDER BY " + sort + " " + dir + " LIMIT ? OFFSET ?"
+	rows, err := s.DB.Query(query, append(args, per, (page-1)*per)...)
+	if err != nil {
+		writeError(w, 500, err.Error())
+		return
+	}
+	defer rows.Close()
+	out := []map[string]any{}
+	for rows.Next() {
+		var id, score int64
+		var objective sql.NullInt64
+		var vals [26]sql.NullString
+		if err := rows.Scan(&id, &objective, &vals[0], &vals[1], &vals[2], &vals[3], &vals[4], &vals[5], &vals[6], &vals[7], &vals[8], &vals[9], &vals[10], &vals[11], &vals[12], &vals[13], &vals[14], &vals[15], &vals[16], &score, &vals[17], &vals[18], &vals[19], &vals[20], &vals[21], &vals[22], &vals[23], &vals[24]); err != nil {
+			continue
+		}
+		keys := []string{"external_key", "first_name", "last_name", "full_name", "email", "email_status", "phone", "company_name", "company_domain", "position_title", "department", "industry_name", "country_code", "country_name", "city", "linkedin_url", "website_url", "score_breakdown", "source", "raw_data", "status", "summary", "outreach_message", "created_at", "updated_at"}
+		m := map[string]any{"id": id, "lead_score": score}
+		if objective.Valid {
+			m["objective_id"] = objective.Int64
+		}
+		for i, k := range keys {
+			m[k] = vals[i].String
+		}
+		out = append(out, m)
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{"data": out, "page": page, "per_page": per, "total": total, "last_page": max(1, (total+per-1)/per)})
 }
 
 func (s *Server) Lists(w http.ResponseWriter, r *http.Request) {
@@ -250,7 +324,25 @@ func (s *Server) Metrics(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte("# HELP leads_total\nleads_total " + strconv.Itoa(leads) + "\n"))
 }
 
+func eventObjectiveID(e events.Event) string {
+	payload, ok := e.Payload.(map[string]any)
+	if !ok {
+		return ""
+	}
+	v, ok := payload["objective_id"]
+	if !ok {
+		return ""
+	}
+	return fmt.Sprint(v)
+}
 func (s *Server) Events(w http.ResponseWriter, r *http.Request) {
+	objectiveID := strings.TrimSpace(r.URL.Query().Get("objective_id"))
+	if objectiveID != "" {
+		if _, err := strconv.ParseInt(objectiveID, 10, 64); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid objective_id")
+			return
+		}
+	}
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
@@ -271,6 +363,9 @@ func (s *Server) Events(w http.ResponseWriter, r *http.Request) {
 	for {
 		select {
 		case e := <-ch:
+			if objectiveID != "" && eventObjectiveID(e) != objectiveID {
+				continue
+			}
 			b, _ := json.Marshal(e)
 			w.Write([]byte("data: " + string(b) + "\n\n"))
 			if f, ok := w.(http.Flusher); ok {
@@ -323,22 +418,42 @@ func (s *Server) Tasks(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(out)
 }
 func (s *Server) LeadsExport(w http.ResponseWriter, r *http.Request) {
-	rows, _ := s.DB.Query("SELECT first_name,last_name,email,company_name,company_domain,position_title,industry_name,country_code,city,lead_score,linkedin_url FROM leads ORDER BY id")
-	w.Header().Set("Content-Type", "text/csv")
-	w.Header().Set("Content-Disposition", "attachment; filename=leads.csv")
-	cw := csv.NewWriter(w)
-	cw.Write([]string{"first_name", "last_name", "email", "company", "company_domain", "title", "industry", "country", "city", "score", "linkedin"})
-	if rows != nil {
-		defer rows.Close()
-		for rows.Next() {
-			var fn, ln, em, co, dom, ti, ind, cc, city, li sql.NullString
-			var sc sql.NullInt64
-			rows.Scan(&fn, &ln, &em, &co, &dom, &ti, &ind, &cc, &city, &sc, &li)
-			cw.Write([]string{fn.String, ln.String, em.String, co.String, dom.String, ti.String, ind.String, cc.String, city.String, strconv.FormatInt(sc.Int64, 10), li.String})
+	where := ""
+	args := []any{}
+	filename := "leads.csv"
+	if objectiveID := strings.TrimSpace(r.URL.Query().Get("objective_id")); objectiveID != "" {
+		if _, err := strconv.ParseInt(objectiveID, 10, 64); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid objective_id")
+			return
 		}
+		where = " WHERE objective_id=?"
+		args = append(args, objectiveID)
+		filename = "objective-" + objectiveID + "-leads.csv"
+	}
+	rows, err := s.DB.Query("SELECT first_name,last_name,email,company_name,company_domain,position_title,industry_name,country_code,city,lead_score,linkedin_url,website_url,status,source,created_at,updated_at FROM leads"+where+" ORDER BY id", args...)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	w.Header().Set("Content-Type", "text/csv")
+	w.Header().Set("Content-Disposition", `attachment; filename="`+filename+`"`)
+	cw := csv.NewWriter(w)
+	cw.Write([]string{"first_name", "last_name", "email", "company", "company_domain", "title", "industry", "country", "city", "score", "linkedin", "website", "status", "source", "created_at", "updated_at"})
+	defer rows.Close()
+	for rows.Next() {
+		var v [16]sql.NullString
+		if err := rows.Scan(&v[0], &v[1], &v[2], &v[3], &v[4], &v[5], &v[6], &v[7], &v[8], &v[9], &v[10], &v[11], &v[12], &v[13], &v[14], &v[15]); err != nil {
+			continue
+		}
+		row := make([]string, len(v))
+		for i := range v {
+			row[i] = v[i].String
+		}
+		cw.Write(row)
 	}
 	cw.Flush()
 }
+
 func (s *Server) Iterations(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	rows, _ := s.DB.Query("SELECT id,run_id,iteration_number,objective_snapshot,plan,reasoning_summary,action,action_result,reflection,status,started_at FROM iterations ORDER BY id DESC LIMIT 100")
