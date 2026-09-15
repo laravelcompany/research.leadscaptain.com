@@ -106,6 +106,26 @@ DATABASE_PATH=/tmp/research-leads/leads.db
 EXPORT_DIR=/tmp/research-leads/exports
 ```
 
+## Objective leads and debugging API
+
+The Objectives screen links each objective to `/objectives/:id/leads`. The page is isolated by the objective's database ID and combines its progress, paginated lead table, CSV export and objective-filtered SSE debugger.
+
+```bash
+# Objective metadata and scoped progress
+curl -b cookies.txt localhost:7001/api/v1/objectives/42
+
+# Search/filter/sort one objective's leads
+curl -b cookies.txt 'localhost:7001/api/v1/leads?objective_id=42&search=acme&min_score=70&status=NEW&source=leadscaptain&sort=score&direction=desc&page=1&per_page=25'
+
+# Export only that objective's leads
+curl -b cookies.txt -OJ 'localhost:7001/api/v1/leads/export?objective_id=42'
+
+# Stream only events carrying objective_id=42 in their payload
+curl -N -b cookies.txt 'localhost:7001/api/v1/events?objective_id=42'
+```
+
+`GET /api/v1/leads` returns `data`, `page`, `per_page`, `total`, and `last_page`. Supported filters are `objective_id`, `search`, `country`, `status`, `source`, and `min_score`; sort keys are `created_at`, `updated_at`, `name`, `company`, `score`, `status`, and `source`. SSE filtering is performed on the server, so events from other objectives never enter the selected objective's browser log. The client reconnects with bounded exponential backoff and closes the stream on navigation.
+
 ## Notable behavior
 - Objectives have `target_leads` / `minimum_score`; the agent stops when the
   target is met for *that objective's* leads.

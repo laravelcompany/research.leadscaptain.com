@@ -3,7 +3,7 @@ import { Badge } from '../ui/Badge'
 import { Modal } from '../ui/Modal'
 import { api } from '../../services/api'
 import { toast } from '../ui/Toast'
-export function ObjectiveList({objectives,refresh}:{objectives:any[],refresh:()=>void}){
+export function ObjectiveList({objectives,refresh,onOpen}:{objectives:any[],refresh:()=>void,onOpen:(id:number)=>void}){
  const [busy,setBusy]=useState<number|null>(null)
  const [confirm,setConfirm]=useState<{id:number,action:string}|null>(null)
  const run=async(id:number,action:string)=>{
@@ -24,18 +24,18 @@ export function ObjectiveList({objectives,refresh}:{objectives:any[],refresh:()=
      const pct=o.progress ?? (o.target_leads ? Math.min(100, Math.round(((o.qualified ?? o.leads_discovered ?? 0))/o.target_leads*100)) : 0)
      const paused=o.status==='paused'
     return (
-     <div key={o.id} className="bg-white border rounded-2xl p-4">
+     <div key={o.id} role="link" tabIndex={0} aria-label={`Open ${o.name} leads`} onClick={()=>onOpen(o.id)} onKeyDown={e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();onOpen(o.id)}}} className="bg-white border rounded-2xl p-4 cursor-pointer hover:border-zinc-400 hover:shadow-sm focus:outline-none focus:ring-2 focus:ring-zinc-900">
       <div className="flex justify-between items-start gap-3">
        <div className="min-w-0 flex-1"><div className="font-semibold flex items-center gap-2 flex-wrap">{o.name} <Badge variant={o.status==='running'?'success':o.status==='completed'?'info':o.status==='failed'?'danger':paused?'warning':'default'}>{o.status}</Badge>{o.minimum_score ? <span className="text-xs text-zinc-400 font-normal">min score {o.minimum_score}</span> : null}</div><div className="text-sm text-zinc-500 truncate">{o.description}</div></div>
         <div className="flex gap-1.5 shrink-0 flex-wrap justify-end">
          {paused ? (
-          <button disabled={busy===o.id} onClick={()=>run(o.id,'resume')} className="bg-emerald-600 text-white px-3 py-1.5 rounded-lg text-xs disabled:opacity-50 hover:bg-emerald-700">{busy===o.id?'...':'Resume'}</button>
+          <button disabled={busy===o.id} onClick={e=>{e.stopPropagation();run(o.id,'resume')}} className="bg-emerald-600 text-white px-3 py-1.5 rounded-lg text-xs disabled:opacity-50 hover:bg-emerald-700">{busy===o.id?'...':'Resume'}</button>
          ) : (
-          <button disabled={busy===o.id || o.status==='running'} onClick={()=>run(o.id,'start')} className="bg-zinc-900 text-white px-3 py-1.5 rounded-lg text-xs disabled:opacity-50">{busy===o.id?'...':'Start'}</button>
+          <button disabled={busy===o.id || o.status==='running'} onClick={e=>{e.stopPropagation();run(o.id,'start')}} className="bg-zinc-900 text-white px-3 py-1.5 rounded-lg text-xs disabled:opacity-50">{busy===o.id?'...':'Start'}</button>
          )}
-         <button disabled={busy===o.id} onClick={()=>setConfirm({id:o.id,action:'pause'})} className="border bg-white px-3 py-1.5 rounded-lg text-xs">Pause</button>
-         <button disabled={busy===o.id} onClick={()=>setConfirm({id:o.id,action:'stop'})} className="border bg-white px-3 py-1.5 rounded-lg text-xs">Stop</button>
-         <button disabled={busy===o.id} onClick={()=>setConfirm({id:o.id,action:'delete'})} className="border bg-white hover:bg-red-50 text-red-600 px-3 py-1.5 rounded-lg text-xs">Delete</button>
+         <button disabled={busy===o.id} onClick={e=>{e.stopPropagation();setConfirm({id:o.id,action:'pause'})}} className="border bg-white px-3 py-1.5 rounded-lg text-xs">Pause</button>
+         <button disabled={busy===o.id} onClick={e=>{e.stopPropagation();setConfirm({id:o.id,action:'stop'})}} className="border bg-white px-3 py-1.5 rounded-lg text-xs">Stop</button>
+         <button disabled={busy===o.id} onClick={e=>{e.stopPropagation();setConfirm({id:o.id,action:'delete'})}} className="border bg-white hover:bg-red-50 text-red-600 px-3 py-1.5 rounded-lg text-xs">Delete</button>
         </div>
       </div>
        {o.target_leads && <div className="mt-3"><div className="flex justify-between text-xs font-medium text-zinc-600"><span>Progress {o.qualified ?? o.leads_discovered ?? 0}/{o.target_leads} {o.iteration_count ? `· ${o.iteration_count} iters` : ''} · {o.status}</span><span>{pct}%</span></div><div className="h-2 bg-zinc-100 rounded-full overflow-hidden mt-1"><div className={`h-full transition-all duration-500 ${o.status==='running'?'bg-emerald-600 animate-pulse':o.status==='completed'?'bg-blue-600':'bg-zinc-900'}`} style={{width:pct+'%'}}/></div></div>}

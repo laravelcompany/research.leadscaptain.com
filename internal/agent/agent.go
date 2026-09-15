@@ -121,7 +121,7 @@ func (e *Engine) loop(runID, objectiveID int64, startIter int) {
 			action.Action = "wait"
 		}
 		e.db.ExecContext(ctx, "UPDATE iterations SET objective_snapshot=?, plan=?, reasoning_summary=? WHERE id=?", prompt, rawAI, string(action.Parameters), iterID)
-		e.bus.Publish(events.Event{Type: "iteration.started", Payload: map[string]any{"iteration_id": iterID, "prompt": prompt, "ai_raw": rawAI, "action": action.Action, "params": string(action.Parameters)}})
+		e.bus.Publish(events.Event{Type: "iteration.started", Payload: map[string]any{"objective_id": objectiveID, "run_id": runID, "iteration_id": iterID, "prompt": prompt, "ai_raw": rawAI, "action": action.Action, "params": string(action.Parameters)}})
 
 		var result any
 		var actErr string
@@ -132,14 +132,14 @@ func (e *Engine) loop(runID, objectiveID int64, startIter int) {
 				actErr = err.Error()
 				e.log.Error("tool failed", "action", action.Action, "err", actErr)
 				e.db.ExecContext(ctx, "UPDATE iterations SET action=?, action_result=?, reflection=?, status='failed', completed_at=CURRENT_TIMESTAMP WHERE id=?", action.Action, actErr, action.Reason, iterID)
-				e.bus.Publish(events.Event{Type: "api.error", Payload: map[string]any{"iteration_id": iterID, "error": actErr}})
+				e.bus.Publish(events.Event{Type: "api.error", Payload: map[string]any{"objective_id": objectiveID, "run_id": runID, "iteration_id": iterID, "action": action.Action, "error": actErr}})
 			} else {
 				result = res
 				b, _ := json.Marshal(result)
 				e.log.Info("tool success", "action", action.Action, "result_len", len(b))
 				e.handleResult(ctx, objectiveID, action.Action, action.Parameters, result)
 				e.db.ExecContext(ctx, "UPDATE iterations SET action=?, action_result=?, reflection=?, status='completed', completed_at=CURRENT_TIMESTAMP WHERE id=?", action.Action, string(b), action.Reason, iterID)
-				e.bus.Publish(events.Event{Type: "api.response", Payload: map[string]any{"iteration_id": iterID, "action": action.Action, "result": string(b)}})
+				e.bus.Publish(events.Event{Type: "api.response", Payload: map[string]any{"objective_id": objectiveID, "run_id": runID, "iteration_id": iterID, "action": action.Action, "result": string(b)}})
 			}
 		} else if action.Action == "complete_objective" {
 			e.db.ExecContext(ctx, "UPDATE objectives SET status='completed', completed_at=CURRENT_TIMESTAMP WHERE id=?", objectiveID)
@@ -335,7 +335,7 @@ func (e *Engine) handleResult(ctx context.Context, objectiveID int64, action str
 			e.db.ExecContext(ctx, "INSERT INTO search_history(objective_id,query,result_count) VALUES(?,?,?)", objectiveID, qText, len(leads))
 		}
 		e.log.Info("leads inserted", "count", len(leads), "pend", len(pend))
-		e.bus.Publish(events.Event{Type: "lead.created", Payload: map[string]any{"count": len(leads)}})
+		e.bus.Publish(events.Event{Type: "lead.created", Payload: map[string]any{"objective_id": objectiveID, "count": len(leads)}})
 		if len(pend) > 0 {
 			e.log.Info("generating intros", "count", len(pend))
 			go e.generateIntros(pend)
