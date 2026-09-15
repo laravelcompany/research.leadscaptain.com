@@ -12,6 +12,8 @@ import (
 	"research-leads/internal/agent"
 	"research-leads/internal/ai"
 	"research-leads/internal/api"
+	"research-leads/internal/api/handlers"
+	"research-leads/internal/api/middleware"
 	"research-leads/internal/companyreg"
 	"research-leads/internal/config"
 	"research-leads/internal/db"
@@ -49,7 +51,11 @@ func main() {
 	reg.Register(tools.NewFindEmail(ev))
 	engine := agent.New(database, aiClient, reg, bus, logger, cfg.MaxIterations)
 	engine.Recover(context.Background())
-	handler := api.Router(database, bus, engine, cfg.CORSOrigins, cfg.AppAPIKey, ev)
+	authCfg := &handlers.AuthConfig{User: cfg.AuthUser, Pass: cfg.AuthPass, Secret: middleware.SessionSecret(cfg.AuthUser, cfg.AuthPass, cfg.SessionSecret)}
+	if authCfg.Enabled() {
+		logger.Info("ui auth enabled", "user", cfg.AuthUser)
+	}
+	handler := api.Router(database, bus, engine, cfg.CORSOrigins, cfg.AppAPIKey, ev, authCfg)
 	srv := &http.Server{Addr: cfg.Host + ":" + cfg.Port, Handler: handler}
 	go func() {
 		logger.Info("listening", "addr", srv.Addr)

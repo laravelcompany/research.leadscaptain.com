@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 	"sync/atomic"
 	"time"
 )
@@ -18,7 +19,7 @@ type Client struct {
 }
 
 func New(baseURL, token string, timeout int) *Client {
-	return &Client{baseURL: baseURL, token: token, http: &http.Client{Timeout: time.Duration(timeout) * time.Second}}
+	return &Client{baseURL: strings.TrimRight(baseURL, "/"), token: token, http: &http.Client{Timeout: time.Duration(timeout) * time.Second}}
 }
 
 type SearchParams struct {
@@ -47,8 +48,10 @@ type Lead struct {
 func (c *Client) Search(ctx context.Context, p SearchParams) ([]Lead, error) {
 	fmt.Printf("{\"time\":\"%s\",\"level\":\"DEBUG\",\"msg\":\"leads search\",\"q\":\"%s\",\"country\":\"%s\",\"city\":\"%s\",\"industry\":\"%s\",\"per_page\":%d}\n", time.Now().Format(time.RFC3339), p.Q, p.CountryCode, p.City, p.Industry, p.PerPage)
 	if c.baseURL == "" {
-		fmt.Printf("{\"time\":\"%s\",\"level\":\"DEBUG\",\"msg\":\"using mock leads\"}\n", time.Now().Format(time.RFC3339))
-		return mockLeads(p), nil
+		return nil, fmt.Errorf("leadscaptain base URL is required")
+	}
+	if c.token == "" {
+		return nil, fmt.Errorf("leadscaptain API token is required")
 	}
 	u, _ := url.Parse(c.baseURL + "/leads")
 	q := u.Query()
@@ -71,10 +74,8 @@ func (c *Client) Search(ctx context.Context, p SearchParams) ([]Lead, error) {
 	}
 	u.RawQuery = q.Encode()
 	req, _ := http.NewRequestWithContext(ctx, "GET", u.String(), nil)
-	if c.token != "" {
-		req.Header.Set("X-API-Token", c.token)
-		req.Header.Set("Authorization", "Bearer "+c.token)
-	}
+	req.Header.Set("X-API-Token", c.token)
+	req.Header.Set("Authorization", "Bearer "+c.token)
 	resp, err := c.http.Do(req)
 	if err != nil {
 		return nil, err
@@ -130,10 +131,8 @@ func (c *Client) Search(ctx context.Context, p SearchParams) ([]Lead, error) {
 			q.Set("page", fmt.Sprint(page))
 			u.RawQuery = q.Encode()
 			req2, _ := http.NewRequestWithContext(ctx, "GET", u.String(), nil)
-			if c.token != "" {
-				req2.Header.Set("X-API-Token", c.token)
-				req2.Header.Set("Authorization", "Bearer "+c.token)
-			}
+			req2.Header.Set("X-API-Token", c.token)
+			req2.Header.Set("Authorization", "Bearer "+c.token)
 			resp2, err := c.http.Do(req2)
 			if err != nil {
 				break

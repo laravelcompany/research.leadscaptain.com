@@ -27,6 +27,9 @@ type Config struct {
 	CORSOrigins   string
 	CHAPIKey      string
 	ExportDir     string
+	AuthUser      string
+	AuthPass      string
+	SessionSecret string
 }
 
 func Load() Config {
@@ -34,11 +37,11 @@ func Load() Config {
 		Env:           env("APP_ENV", "development"),
 		Host:          env("APP_HOST", "0.0.0.0"),
 		Port:          env("APP_PORT", "8080"),
-		DatabasePath:  env("DATABASE_PATH", "./data/leads.db"),
+		DatabasePath:  env("DATABASE_PATH", "/tmp/research-leads/leads.db"),
 		AIBaseURL:     env("AI_BASE_URL", "https://ai.izdrail.com"),
 		AIModel:       env("AI_MODEL", "gemma4:e2b"),
 		AIAPIKey:      os.Getenv("AI_API_KEY"),
-		LCBaseURL:     os.Getenv("LEADSCAPTAIN_BASE_URL"),
+		LCBaseURL:     env("LEADSCAPTAIN_BASE_URL", "https://api.leadscaptain.com"),
 		LCAPIToken:    os.Getenv("LEADSCAPTAIN_API_TOKEN"),
 		EmailValURL:   os.Getenv("EMAIL_VALIDATION_URL"),
 		EmailValKey:   os.Getenv("EMAIL_VALIDATION_API_KEY"),
@@ -51,7 +54,10 @@ func Load() Config {
 		AppAPIKey:     os.Getenv("APP_API_KEY"),
 		CORSOrigins:   env("CORS_ALLOWED_ORIGINS", "*"),
 		CHAPIKey:      os.Getenv("COMPANIES_HOUSE_API_KEY"),
-		ExportDir:     env("EXPORT_DIR", "./data/exports"),
+		ExportDir:     env("EXPORT_DIR", "/tmp/research-leads/exports"),
+		AuthUser:      os.Getenv("AUTH_USERNAME"),
+		AuthPass:      os.Getenv("AUTH_PASSWORD"),
+		SessionSecret: os.Getenv("AUTH_SESSION_SECRET"),
 	}
 }
 func env(k, d string) string {
