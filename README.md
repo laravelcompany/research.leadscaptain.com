@@ -44,6 +44,31 @@ already run (so the agent does not repeat itself). Without an AI endpoint the
 fallback heuristic derives the search query, country and city from the
 objective text instead of hardcoded defaults.
 
+## UI auth (login screen)
+Set `AUTH_USERNAME` and `AUTH_PASSWORD` in `.env` and the web UI shows a login
+screen before any data loads. Login issues a signed HttpOnly session cookie
+(7-day expiry); the header gains a Sign out button. With either variable
+empty the login screen is disabled and the app behaves as before.
+
+- `POST /api/v1/auth/login` `{"username":"...","password":"..."}` - logs in,
+  sets the session cookie. Also returns the cookie for browser use.
+- `GET /api/v1/auth/me` - `{"auth_required":bool,"authenticated":bool}`.
+- `POST /api/v1/auth/logout` - clears the cookie.
+- API clients keep using `Authorization: Bearer $APP_API_KEY` untouched; a
+  valid UI session cookie also satisfies the `APP_API_KEY` gate so the UI
+  works when both are configured. Health and metrics endpoints stay open.
+- `AUTH_SESSION_SECRET` optionally overrides the cookie-signing key (default
+  is derived from the credentials, so sessions survive restarts but are
+  invalidated when credentials change).
+
+```bash
+curl -c cookies.txt -X POST localhost:7001/api/v1/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"username":"admin","password":"S3curePass!"}'
+curl -b cookies.txt localhost:7001/api/v1/stats
+curl -b cookies.txt -X POST localhost:7001/api/v1/auth/logout
+```
+
 ## Quick start
 cp .env.example .env
 make build

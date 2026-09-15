@@ -1,8 +1,14 @@
+// Set by App: called whenever any API request comes back 401, so the UI
+// can bounce back to the login screen mid-session.
+export let onUnauthorized:()=>void=()=>{}
+export function setOnUnauthorized(cb:()=>void){ onUnauthorized=cb }
+
 async function apiFetch<T>(path:string, opts:RequestInit={}):Promise<T>{
  const hasBody=!!opts.body
  const headers:any={...(opts.headers as any||{})}
  if(hasBody) headers['Content-Type']='application/json'
  const res=await fetch(path, {...opts, headers})
+ if(res.status===401 && !path.startsWith('/api/v1/auth/')) onUnauthorized()
  if(!res.ok){
   const text=await res.text().catch(()=>'')
   let msg=text
@@ -14,6 +20,11 @@ async function apiFetch<T>(path:string, opts:RequestInit={}):Promise<T>{
  return res.json() as Promise<T>
 }
 export const api={
+ auth:{
+  me:()=>apiFetch<{auth_required:boolean,authenticated:boolean,username?:string}>('/api/v1/auth/me'),
+  login:(username:string,password:string)=>apiFetch<{ok:boolean,username?:string}>('/api/v1/auth/login',{method:'POST',body:JSON.stringify({username,password})}),
+  logout:()=>apiFetch<{ok:boolean}>('/api/v1/auth/logout',{method:'POST'}),
+ },
  stats:()=>apiFetch<any>('/api/v1/stats'),
   leads:(params:Record<string,string>={})=>{
    const clean:Record<string,string>={}; for(const [k,v] of Object.entries(params)) if(v) clean[k]=v

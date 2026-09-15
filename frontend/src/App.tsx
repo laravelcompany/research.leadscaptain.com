@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
-import { api } from './services/api'
+import { api, setOnUnauthorized } from './services/api'
+import { LoginScreen } from './components/auth/LoginScreen'
 import { useEventStream } from './hooks/useEventStream'
 import { Sidebar, MobileNav } from './components/layout/Sidebar'
 import { Header } from './components/layout/Header'
@@ -15,6 +16,8 @@ import { ToastContainer, toast } from './components/ui/Toast'
 import { ErrorBoundary } from './components/ui/ErrorBoundary'
 
 export default function App(){
+ const [authState,setAuthState]=useState<'loading'|'login'|'ready'>('loading')
+ const [authUser,setAuthUser]=useState('')
  const [tab,setTab]=useState('dashboard')
  const [stats,setStats]=useState<any>(null)
  const [statsLoading,setStatsLoading]=useState(true)
@@ -34,7 +37,17 @@ export default function App(){
  const refreshIters=async()=>{ setItersLoading(true); try{ const r:any=await api.iterations(); setIters(Array.isArray(r)?r:r?.data||[])}catch(e:any){ toast(e.message,'error')}finally{ setItersLoading(false)}}
  const refreshAll=()=>{ refreshStats(); refreshObjectives(); refreshLeads(); refreshIters(); setLastUpdated('Last updated '+new Date().toLocaleTimeString())}
 
- useEffect(()=>{ refreshAll()},[])
+ useEffect(()=>{
+  setOnUnauthorized(()=>setAuthState('login'))
+  api.auth.me()
+   .then(r=>{ if(r.auth_required && !r.authenticated){ setAuthState('login') } else { setAuthUser(r.username||''); setAuthState('ready') } })
+   .catch(()=>setAuthState('login'))
+ },[])
+
+ useEffect(()=>{ if(authState==='ready') refreshAll()},[authState])
+
+ const logout=async()=>{ try{ await api.auth.logout() }catch{} setAuthUser(''); setAuthState('login') }
+
 
  const {events,state,clear}=useEventStream((e)=>{
   if(e.type==='lead.created' || e.type==='api.response') refreshLeads(), refreshStats()
@@ -42,11 +55,14 @@ export default function App(){
   else if(e.type?.startsWith('iteration')) refreshIters()
  })
 
+  if(authState==='loading') return <div className="min-h-screen bg-zinc-50 flex items-center justify-center text-sm text-zinc-400">Loading...</div>
+  if(authState==='login') return <><LoginScreen onLogin={(u)=>{ setAuthUser(u); setAuthState('ready') }} /><ToastContainer /></>
+
   return (
    <ErrorBoundary><div className="min-h-screen bg-zinc-50 flex">
    <Sidebar active={tab} onChange={setTab} />
    <div className="flex-1 min-w-0 flex flex-col">
-    <Header onRefresh={refreshAll} lastUpdated={lastUpdated} conn={state} />
+    <Header onRefresh={refreshAll} lastUpdated={lastUpdated} conn={state} authUser={authUser} onLogout={logout} />
     <MobileNav active={tab} onChange={setTab} />
     <main className="flex-1 p-4 md:p-6 space-y-6 overflow-auto">
      {tab==='dashboard' && (
