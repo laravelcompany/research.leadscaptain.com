@@ -1,4 +1,7 @@
 # Autonomous Lead Research Agent
+Repository: https://github.com/laravelcompany/research.leadscaptain.com
+(moved from `izdrail/research-leads.izdrail.com` - old URLs redirect here)
+
 Go + React lead research platform. An agent engine plans iterations with an
 LLM, calls tools, scores and stores leads, and drafts outreach - all over a
 chi REST API with a React frontend and a SQLite store.
@@ -51,6 +54,10 @@ cd frontend && npm install && npm run dev
 
 ## Docker
 docker compose up --build
+
+# or use the published image (CI pushes on main and v* tags)
+docker pull izdrail/research.izdrail.com:latest
+docker run -p 7001:7001 --env-file .env izdrail/research.izdrail.com:latest
 
 ## Notable behavior
 - Objectives have `target_leads` / `minimum_score`; the agent stops when the
