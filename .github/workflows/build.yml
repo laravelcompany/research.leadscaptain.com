@@ -63,7 +63,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: izdrail/research.izdrail.com
+          images: izdrail/research.leadscaptain.com
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
             type=ref,event=tag

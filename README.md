@@ -56,8 +56,8 @@ cd frontend && npm install && npm run dev
 docker compose up --build
 
 # or use the published image (CI pushes on main and v* tags)
-docker pull izdrail/research.izdrail.com:latest
-docker run -p 7001:7001 --env-file .env izdrail/research.izdrail.com:latest
+docker pull izdrail/research.leadscaptain.com:latest
+docker run -p 7001:7001 --env-file .env izdrail/research.leadscaptain.com:latest
 
 ## Notable behavior
 - Objectives have `target_leads` / `minimum_score`; the agent stops when the
