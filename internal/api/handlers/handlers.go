@@ -1,22 +1,28 @@
 package handlers
 
 import (
+	"context"
 	"database/sql"
+	"encoding/csv"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"research-leads/internal/agent"
 	"research-leads/internal/events"
+	"research-leads/internal/leads"
 )
 
 type Server struct {
 	DB     *sql.DB
 	Bus    *events.Bus
 	Engine *agent.Engine
+	// VerifyEmail verifies one address and returns its status (e.g. "valid",
+	// "invalid", "unknown"). May be nil when no validator is configured.
+	VerifyEmail func(ctx context.Context, email string) (string, error)
 }
 
 func (s *Server) Objectives(w http.ResponseWriter, r *http.Request) {
@@ -125,17 +131,26 @@ func (s *Server) StartObjective(w http.ResponseWriter, r *http.Request) {
 }
 func (s *Server) PauseObjective(w http.ResponseWriter, r *http.Request) {
 	id, _ := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
-	s.Engine.Pause(r.Context(), id)
+	if err := s.Engine.Pause(r.Context(), id); err != nil {
+		http.Error(w, `{"error":"`+err.Error()+`"}`, 409)
+		return
+	}
 	json.NewEncoder(w).Encode(map[string]any{"status": "paused"})
 }
 func (s *Server) ResumeObjective(w http.ResponseWriter, r *http.Request) {
 	id, _ := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
-	s.Engine.Resume(r.Context(), id)
+	if err := s.Engine.Resume(r.Context(), id); err != nil {
+		http.Error(w, `{"error":"`+err.Error()+`"}`, 409)
+		return
+	}
 	json.NewEncoder(w).Encode(map[string]any{"status": "running"})
 }
 func (s *Server) StopObjective(w http.ResponseWriter, r *http.Request) {
 	id, _ := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
-	s.Engine.Stop(r.Context(), id)
+	if err := s.Engine.Stop(r.Context(), id); err != nil {
+		http.Error(w, `{"error":"`+err.Error()+`"}`, 409)
+		return
+	}
 	json.NewEncoder(w).Encode(map[string]any{"status": "stopped"})
 }
 
@@ -242,6 +257,7 @@ func (s *Server) Events(w http.ResponseWriter, r *http.Request) {
 		f.Flush()
 	}
 	ch := s.Bus.Subscribe()
+	defer s.Bus.Unsubscribe(ch)
 	// initial hello to unblock client
 	w.Write([]byte("retry: 3000\n"))
 	w.Write([]byte("data: {\"type\":\"connected\",\"payload\":{}}\n\n"))
@@ -308,17 +324,18 @@ func (s *Server) LeadsExport(w http.ResponseWriter, r *http.Request) {
 	rows, _ := s.DB.Query("SELECT first_name,last_name,email,company_name,company_domain,position_title,industry_name,country_code,city,lead_score,linkedin_url FROM leads ORDER BY id")
 	w.Header().Set("Content-Type", "text/csv")
 	w.Header().Set("Content-Disposition", "attachment; filename=leads.csv")
-	w.Write([]byte("first_name,last_name,email,company,company_domain,title,industry,country,city,score,linkedin\n"))
+	cw := csv.NewWriter(w)
+	cw.Write([]string{"first_name", "last_name", "email", "company", "company_domain", "title", "industry", "country", "city", "score", "linkedin"})
 	if rows != nil {
 		defer rows.Close()
 		for rows.Next() {
 			var fn, ln, em, co, dom, ti, ind, cc, city, li sql.NullString
 			var sc sql.NullInt64
 			rows.Scan(&fn, &ln, &em, &co, &dom, &ti, &ind, &cc, &city, &sc, &li)
-			line := "\"" + fn.String + "\",\"" + ln.String + "\",\"" + em.String + "\",\"" + co.String + "\",\"" + dom.String + "\",\"" + ti.String + "\",\"" + ind.String + "\",\"" + cc.String + "\",\"" + city.String + "\",\"" + strconv.FormatInt(sc.Int64, 10) + "\",\"" + li.String + "\"\n"
-			w.Write([]byte(line))
+			cw.Write([]string{fn.String, ln.String, em.String, co.String, dom.String, ti.String, ind.String, cc.String, city.String, strconv.FormatInt(sc.Int64, 10), li.String})
 		}
 	}
+	cw.Flush()
 }
 func (s *Server) Iterations(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
@@ -379,6 +396,11 @@ func (s *Server) LeadStatus(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"invalid status"}`, 400)
 		return
 	}
+	// enforce the lifecycle state machine (ARCHIVED and DO_NOT_CONTACT are reachable from anywhere)
+	if to != "DO_NOT_CONTACT" && !leads.CanTransition(from, to) {
+		http.Error(w, `{"error":"invalid transition `+from+` -> `+to+`"}`, 400)
+		return
+	}
 	// record history
 	s.DB.Exec("UPDATE leads SET status=? WHERE id=?", to, id)
 	s.DB.Exec("INSERT INTO lead_status_history(lead_id,old_status,new_status,reason) VALUES(?,?,?,?)", id, from, to, body.Reason)
@@ -398,55 +420,38 @@ func (s *Server) LeadScoreExplain(w http.ResponseWriter, r *http.Request) {
 }
 func (s *Server) AdvancedSearch(w http.ResponseWriter, r *http.Request) {
 	var q struct {
-		Filters []struct {
-			Field    string      `json:"field"`
-			Operator string      `json:"operator"`
-			Value    interface{} `json:"value"`
-		} `json:"filters"`
-		Limit  int `json:"limit"`
-		Offset int `json:"offset"`
+		Filters []leads.Filter `json:"filters"`
+		Limit   int            `json:"limit"`
+		Offset  int            `json:"offset"`
 	}
 	json.NewDecoder(r.Body).Decode(&q)
-	if q.Limit == 0 {
+	if q.Limit <= 0 {
 		q.Limit = 50
 	}
 	if q.Limit > 250 {
 		q.Limit = 250
 	}
-	// build where via simple mapping
-	where := "1=1"
-	var args []any
-	for _, f := range q.Filters {
-		col := f.Field
-		if col == "title" {
-			col = "position_title"
-		} else if col == "country" {
-			col = "country_code"
-		} else if col == "company" {
-			col = "company_name"
-		}
-		op := f.Operator
-		if op == "CONTAINS" {
-			where += " AND " + col + " LIKE ?"
-			args = append(args, "%"+fmt.Sprint(f.Value)+"%")
-		} else if op == "=" {
-			where += " AND " + col + "=?"
-			args = append(args, f.Value)
-		} else if op == ">=" {
-			where += " AND overall_score>=?"
-			args = append(args, f.Value)
-		}
+	if q.Offset < 0 {
+		q.Offset = 0
 	}
-	rows, _ := s.DB.Query("SELECT id,first_name,last_name,email,company_name,position_title,overall_score FROM leads WHERE "+where+" LIMIT ? OFFSET ?", append(args, q.Limit, q.Offset)...)
+	where, args, err := leads.BuildWhere(q.Filters)
+	if err != nil {
+		http.Error(w, `{"error":"`+err.Error()+`"}`, 400)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	rows, err := s.DB.Query("SELECT id,first_name,last_name,email,company_name,position_title,overall_score FROM leads WHERE "+where+" LIMIT ? OFFSET ?", append(args, q.Limit, q.Offset)...)
+	if err != nil {
+		http.Error(w, `{"error":"`+err.Error()+`"}`, 400)
+		return
+	}
+	defer rows.Close()
 	var out []map[string]any
-	if rows != nil {
-		defer rows.Close()
-		for rows.Next() {
-			var id, sc int64
-			var fn, ln, em, co, ti sql.NullString
-			rows.Scan(&id, &fn, &ln, &em, &co, &ti, &sc)
-			out = append(out, map[string]any{"id": id, "first_name": fn.String, "last_name": ln.String, "email": em.String, "company_name": co.String, "position_title": ti.String, "overall_score": sc})
-		}
+	for rows.Next() {
+		var id, sc int64
+		var fn, ln, em, co, ti sql.NullString
+		rows.Scan(&id, &fn, &ln, &em, &co, &ti, &sc)
+		out = append(out, map[string]any{"id": id, "first_name": fn.String, "last_name": ln.String, "email": em.String, "company_name": co.String, "position_title": ti.String, "overall_score": sc})
 	}
 	if out == nil {
 		out = []map[string]any{}
@@ -527,22 +532,49 @@ func (s *Server) Segments(w http.ResponseWriter, r *http.Request) {
 func (s *Server) SegmentLeads(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	var fj string
-	s.DB.QueryRow("SELECT filters_json FROM segments WHERE id=?", id).Scan(&fj)
-	// naive: return all leads if no filter parsing
-	rows, _ := s.DB.Query("SELECT id,first_name,last_name,email FROM leads LIMIT 50")
-	var out []map[string]any
-	if rows != nil {
-		defer rows.Close()
-		for rows.Next() {
-			var i int64
-			var fn, ln, em sql.NullString
-			rows.Scan(&i, &fn, &ln, &em)
-			out = append(out, map[string]any{"id": i, "first_name": fn.String, "last_name": ln.String, "email": em.String})
+	if err := s.DB.QueryRow("SELECT filters_json FROM segments WHERE id=?", id).Scan(&fj); err != nil {
+		http.Error(w, `{"error":"segment not found"}`, 404)
+		return
+	}
+	// filters_json is stored either as a bare array of filters or as
+	// {"filters": [...]}; accept both.
+	var filters []leads.Filter
+	if fj != "" {
+		var arr []leads.Filter
+		if json.Unmarshal([]byte(fj), &arr) != nil {
+			var obj struct {
+				Filters []leads.Filter `json:"filters"`
+			}
+			if json.Unmarshal([]byte(fj), &obj) == nil {
+				filters = obj.Filters
+			}
+		} else {
+			filters = arr
 		}
+	}
+	where, args, err := leads.BuildWhere(filters)
+	if err != nil {
+		http.Error(w, `{"error":"`+err.Error()+`"}`, 400)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	rows, err := s.DB.Query("SELECT id,first_name,last_name,email FROM leads WHERE "+where+" LIMIT 50", args...)
+	if err != nil {
+		http.Error(w, `{"error":"`+err.Error()+`"}`, 400)
+		return
+	}
+	defer rows.Close()
+	var out []map[string]any
+	for rows.Next() {
+		var i int64
+		var fn, ln, em sql.NullString
+		rows.Scan(&i, &fn, &ln, &em)
+		out = append(out, map[string]any{"id": i, "first_name": fn.String, "last_name": ln.String, "email": em.String})
 	}
 	if out == nil {
 		out = []map[string]any{}
 	}
+	s.DB.Exec("UPDATE segments SET lead_count=(SELECT count(*) FROM leads WHERE "+where+"), last_calculated=CURRENT_TIMESTAMP WHERE id=?", append(args, id)...)
 	json.NewEncoder(w).Encode(map[string]any{"segment_id": id, "filters": fj, "data": out})
 }
 func (s *Server) SavedSearches(w http.ResponseWriter, r *http.Request) {
@@ -588,7 +620,18 @@ func (s *Server) BulkOperation(w http.ResponseWriter, r *http.Request) {
 		s.DB.Exec("UPDATE bulk_operations SET status='processing' WHERE id=?", id)
 		for i, lid := range b.LeadIDs {
 			if b.Type == "verify" {
-				s.DB.Exec("UPDATE leads SET email_status='valid' WHERE id=?", lid)
+				if s.VerifyEmail != nil {
+					var email string
+					if err := s.DB.QueryRow("SELECT email FROM leads WHERE id=?", lid).Scan(&email); err == nil && email != "" {
+						status, err := s.VerifyEmail(context.Background(), email)
+						if err != nil {
+							status = "unknown"
+						}
+						s.DB.Exec("UPDATE leads SET email_status=?, email_verified_at=CURRENT_TIMESTAMP WHERE id=?", status, lid)
+						continue
+					}
+				}
+				s.DB.Exec("UPDATE leads SET email_status='unknown' WHERE id=?", lid)
 			}
 			if b.Type == "archive" {
 				s.DB.Exec("UPDATE leads SET status='ARCHIVED' WHERE id=?", lid)
@@ -634,27 +677,70 @@ func (s *Server) ResearchQueue(w http.ResponseWriter, r *http.Request) {
 }
 func (s *Server) Imports(w http.ResponseWriter, r *http.Request) {
 	if r.Method == "POST" {
-		r.ParseMultipartForm(10 << 20)
-		file, _, _ := r.FormFile("file")
-		var content []byte
-		if file != nil {
-			content = make([]byte, 4096)
-			file.Read(content)
-			file.Close()
+		if err := r.ParseMultipartForm(10 << 20); err != nil {
+			http.Error(w, `{"error":"multipart form expected"}`, 400)
+			return
 		}
-		s.DB.Exec("INSERT INTO imports(filename,format,status,total_rows) VALUES(?,?,?,?)", "upload.csv", "csv", "pending", len(content))
-		json.NewEncoder(w).Encode(map[string]any{"status": "pending", "preview": string(content[:200])})
+		file, hdr, err := r.FormFile("file")
+		if err != nil {
+			http.Error(w, `{"error":"file field required"}`, 400)
+			return
+		}
+		defer file.Close()
+		filename := "upload.csv"
+		if hdr != nil && hdr.Filename != "" {
+			filename = hdr.Filename
+		}
+		res, err := s.DB.Exec("INSERT INTO imports(filename,format,status) VALUES(?,?,?)", filename, "csv", "processing")
+		if err != nil {
+			http.Error(w, `{"error":"`+err.Error()+`"}`, 500)
+			return
+		}
+		importID, _ := res.LastInsertId()
+
+		parsed, err := leads.ParseLeadsCSV(file)
+		if err != nil {
+			s.DB.Exec("UPDATE imports SET status='failed' WHERE id=?", importID)
+			http.Error(w, `{"error":"could not parse CSV: `+err.Error()+`"}`, 400)
+			return
+		}
+		imported, duplicates := 0, 0
+		seen := map[string]bool{}
+		for _, l := range parsed {
+			key := strings.ToLower(l.Email)
+			if seen[key] {
+				duplicates++
+				continue
+			}
+			seen[key] = true
+			res, err := s.DB.Exec(`INSERT INTO leads(first_name,last_name,email,company_name,company_domain,position_title,industry_name,country_code,city,linkedin_url,source,email_status)
+				SELECT ?,?,?,?,?,?,?,?,?,?,?,? WHERE NOT EXISTS (SELECT 1 FROM leads WHERE email=?)`,
+				l.FirstName, l.LastName, l.Email, l.Company, l.Domain, l.Title, l.Industry, l.Country, l.City, l.Linkedin, "import", "unchecked", l.Email)
+			if err != nil {
+				continue
+			}
+			if n, _ := res.RowsAffected(); n > 0 {
+				imported++
+			} else {
+				duplicates++
+			}
+		}
+		s.DB.Exec("UPDATE imports SET status='completed', total_rows=?, imported_rows=?, duplicate_rows=?, valid_rows=? WHERE id=?",
+			len(parsed), imported, duplicates, imported, importID)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{"id": importID, "filename": filename, "status": "completed", "total_rows": len(parsed), "imported_rows": imported, "duplicate_rows": duplicates})
 		return
 	}
-	rows, _ := s.DB.Query("SELECT id,filename,status FROM imports ORDER BY id DESC")
+	rows, _ := s.DB.Query("SELECT id,filename,status,total_rows,imported_rows,duplicate_rows FROM imports ORDER BY id DESC")
 	var out []map[string]any
 	if rows != nil {
 		defer rows.Close()
 		for rows.Next() {
 			var id int64
 			var fn, st sql.NullString
-			rows.Scan(&id, &fn, &st)
-			out = append(out, map[string]any{"id": id, "filename": fn.String, "status": st.String})
+			var total, imp, dup sql.NullInt64
+			rows.Scan(&id, &fn, &st, &total, &imp, &dup)
+			out = append(out, map[string]any{"id": id, "filename": fn.String, "status": st.String, "total_rows": total.Int64, "imported_rows": imp.Int64, "duplicate_rows": dup.Int64})
 		}
 	}
 	if out == nil {

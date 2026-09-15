@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"net/http"
@@ -14,10 +15,11 @@ import (
 	"research-leads/internal/agent"
 	"research-leads/internal/api/handlers"
 	"research-leads/internal/api/middleware"
+	"research-leads/internal/emailvalidator"
 	"research-leads/internal/events"
 )
 
-func Router(db *sql.DB, bus *events.Bus, engine *agent.Engine, corsOrigins, apiKey string) http.Handler {
+func Router(db *sql.DB, bus *events.Bus, engine *agent.Engine, corsOrigins, apiKey string, verifier *emailvalidator.Client) http.Handler {
 	r := chi.NewRouter()
 	r.Use(func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
@@ -26,7 +28,19 @@ func Router(db *sql.DB, bus *events.Bus, engine *agent.Engine, corsOrigins, apiK
 			_ = start
 		})
 	})
-	r.Use(cors.Handler(cors.Options{AllowedOrigins: []string{"*"}, AllowedMethods: []string{"GET", "POST", "PATCH", "DELETE", "OPTIONS"}, AllowedHeaders: []string{"*"}}))
+	origins := []string{"*"}
+	if strings.TrimSpace(corsOrigins) != "" && strings.TrimSpace(corsOrigins) != "*" {
+		origins = nil
+		for _, o := range strings.Split(corsOrigins, ",") {
+			if o = strings.TrimSpace(o); o != "" {
+				origins = append(origins, o)
+			}
+		}
+		if len(origins) == 0 {
+			origins = []string{"*"}
+		}
+	}
+	r.Use(cors.Handler(cors.Options{AllowedOrigins: origins, AllowedMethods: []string{"GET", "POST", "PATCH", "DELETE", "OPTIONS"}, AllowedHeaders: []string{"*"}}))
 	r.Use(middleware.APIKey(apiKey))
 	r.Use(func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
@@ -35,6 +49,12 @@ func Router(db *sql.DB, bus *events.Bus, engine *agent.Engine, corsOrigins, apiK
 		})
 	})
 	s := &handlers.Server{DB: db, Bus: bus, Engine: engine}
+	if verifier != nil {
+		s.VerifyEmail = func(ctx context.Context, email string) (string, error) {
+			res, err := verifier.Verify(ctx, email)
+			return res.Status, err
+		}
+	}
 	r.Get("/health", s.Health)
 	r.Get("/health/live", s.Health)
 	r.Get("/health/ready", s.Health)
