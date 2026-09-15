@@ -5,6 +5,8 @@ import (
 	"embed"
 	"fmt"
 	"io/fs"
+	"os"
+	"path/filepath"
 	"sort"
 
 	_ "modernc.org/sqlite"
@@ -14,12 +16,22 @@ import (
 var migrationFS embed.FS
 
 func Open(path string) (*sql.DB, error) {
+	// SQLite creates the database file, but not its parent directory. Container
+	// deployments use a configured temporary directory, so make its parent
+	// before the first migration runs.
+	if dir := filepath.Dir(path); dir != "." {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return nil, fmt.Errorf("create database directory %s: %w", dir, err)
+		}
+	}
+
 	db, err := sql.Open("sqlite", path)
 	if err != nil {
 		return nil, err
 	}
 	db.SetMaxOpenConns(1)
 	if err := Migrate(db); err != nil {
+		db.Close()
 		return nil, err
 	}
 	return db, nil

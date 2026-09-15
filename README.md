@@ -12,7 +12,7 @@ is built from the registry, so tools and docs never drift):
 
 | Tool | Purpose | Key required? |
 | --- | --- | --- |
-| `search_leads` | Search LeadsCaptain (mock offline) | LeadsCaptain token |
+| `search_leads` | Search `api.leadscaptain.com` | LeadsCaptain token |
 | `verify_email` | Verify one address | validator key |
 | `find_email` | Generate + verify common patterns for a person at a domain | no |
 | `get_lead` / `list_leads` | Inspect stored leads | no |
@@ -70,6 +70,7 @@ curl -b cookies.txt -X POST localhost:7001/api/v1/auth/logout
 ```
 
 ## Quick start
+```bash
 cp .env.example .env
 make build
 make dev
@@ -83,6 +84,25 @@ docker compose up --build
 # or use the published image (CI pushes on main and v* tags)
 docker pull izdrail/research.leadscaptain.com:latest
 docker run -p 7001:7001 --env-file .env izdrail/research.leadscaptain.com:latest
+```
+
+The local SQLite database is disposable working state, not the lead source.
+By default it lives at `/tmp/research-leads/leads.db`, and CSV exports live
+under `/tmp/research-leads/exports`; both start fresh when the container is
+replaced. Do not attach persistent storage for these paths in Coolify.
+
+Lead search uses `https://api.leadscaptain.com/leads`. Set
+`LEADSCAPTAIN_API_TOKEN` to the token issued by LeadsCaptain. The client sends
+both supported auth forms (`Authorization: Bearer ...` and `X-API-Token`) and
+maps the documented `q`, `position_title`, `country_code`, `location`,
+`industry_name`, `page`, and `limit` parameters:
+
+```env
+LEADSCAPTAIN_BASE_URL=https://api.leadscaptain.com
+LEADSCAPTAIN_API_TOKEN=your-token
+DATABASE_PATH=/tmp/research-leads/leads.db
+EXPORT_DIR=/tmp/research-leads/exports
+```
 
 ## Notable behavior
 - Objectives have `target_leads` / `minimum_score`; the agent stops when the
@@ -93,8 +113,9 @@ docker run -p 7001:7001 --env-file .env izdrail/research.leadscaptain.com:latest
   by email. `GET /api/v1/leads/export` exports CSV.
 - `POST /api/v1/leads/search` runs a whitelisted filter query
   (`{"filters":[{"field":"title","operator":"CONTAINS","value":"CTO"}]}`).
-- Without `LEADSCAPTAIN_BASE_URL` / `EMAIL_VALIDATION_URL` the server uses
-  deterministic mock providers for local development.
+- Lead search requires `LEADSCAPTAIN_API_TOKEN`; the base URL defaults to
+  `https://api.leadscaptain.com`. Email validation keeps its deterministic
+  local fallback when `EMAIL_VALIDATION_URL` is unset.
 - Id-less leads from a provider dedupe by email (fallback external key), and
   addresses with an existing verdict are not re-verified.
 - `company_lookup` fails safe with a clear error when a route is not
