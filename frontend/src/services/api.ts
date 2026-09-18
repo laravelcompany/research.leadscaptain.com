@@ -45,5 +45,14 @@ export const api={
  exportUrl:(params:Record<string,string>={})=>{
   const q=new URLSearchParams(params).toString()
   return '/api/v1/leads/export'+(q?'?'+q:'')
+ },
+ websites:{
+  analyze:(url:string)=>apiFetch<any>('/api/v1/websites/analyze',{method:'POST',body:JSON.stringify({url})}),
+  list:(params:Record<string,string>={})=>{
+   const clean:Record<string,string>={}; for(const [k,v] of Object.entries(params)) if(v) clean[k]=v
+   const q=new URLSearchParams(clean).toString()
+   return apiFetch<{data:any[],total:number}>('/api/v1/websites'+(q?'?'+q:''))
+  },
+  get:(id:number)=>apiFetch<any>('/api/v1/websites/'+id),
  }
 }

@@ -106,6 +106,9 @@ func Router(db *sql.DB, bus *events.Bus, engine *agent.Engine, corsOrigins, apiK
 		r.Post("/analytics/gap", s.GapAnalysis)
 		r.Get("/leads/stale", s.StaleLeads)
 		r.Get("/leads/{id}/similar", s.SimilarLeads)
+		r.Post("/websites/analyze", s.AnalyzeWebsite)
+		r.Get("/websites", s.WebsitesList)
+		r.Get("/websites/{id}", s.WebsiteByID)
 	})
 	staticDir := "frontend/dist"
 	for _, p := range []string{"frontend/dist", "./frontend/dist", "static", "./static", "/app/static"} {

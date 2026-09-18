@@ -15,6 +15,7 @@ import (
 	"research-leads/internal/agent"
 	"research-leads/internal/events"
 	"research-leads/internal/leads"
+	"research-leads/internal/webcheck"
 )
 
 type Server struct {
@@ -26,6 +27,9 @@ type Server struct {
 	VerifyEmail func(ctx context.Context, email string) (string, error)
 	// Auth carries the UI login configuration (env-supplied credentials).
 	Auth *AuthConfig
+	// AnalyzeSite analyzes one URL for the Websites section; nil means the
+	// real webcheck.Analyze. A field so tests can stub the network.
+	AnalyzeSite func(ctx context.Context, rawURL string) webcheck.Analysis
 }
 
 func (s *Server) Objectives(w http.ResponseWriter, r *http.Request) {
