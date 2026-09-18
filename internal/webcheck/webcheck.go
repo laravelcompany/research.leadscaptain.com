@@ -15,18 +15,19 @@ import (
 )
 
 type Result struct {
-	Domain       string   `json:"domain"`
-	URL          string   `json:"url"`
-	FinalURL     string   `json:"final_url"`
-	Reachable    bool     `json:"reachable"`
-	StatusCode   int      `json:"status_code"`
-	Title        string   `json:"title"`
-	Description  string   `json:"description"`
-	Generator    string   `json:"generator"`
-	Server       string   `json:"server"`
-	PoweredBy    string   `json:"powered_by"`
-	Technologies []string `json:"technologies"`
-	Error        string   `json:"error,omitempty"`
+	Domain       string      `json:"domain"`
+	URL          string      `json:"url"`
+	FinalURL     string      `json:"final_url"`
+	Reachable    bool        `json:"reachable"`
+	StatusCode   int         `json:"status_code"`
+	Title        string      `json:"title"`
+	Description  string      `json:"description"`
+	Generator    string      `json:"generator"`
+	Server       string      `json:"server"`
+	PoweredBy    string      `json:"powered_by"`
+	Technologies []string    `json:"technologies"`
+	Socials      SocialLinks `json:"socials"`
+	Error        string      `json:"error,omitempty"`
 }
 
 var (
@@ -121,6 +122,7 @@ func Check(ctx context.Context, domain string) Result {
 	if m := genRe.FindStringSubmatch(html); m != nil {
 		res.Generator = clean(m[1])
 	}
+	res.Socials = ExtractSocials(html)
 	haystack := strings.ToLower(html + " " + res.Server + " " + res.PoweredBy)
 	seen := map[string]bool{}
 	for _, fp := range fingerprints {

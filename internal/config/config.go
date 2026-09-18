@@ -26,6 +26,7 @@ type Config struct {
 	AppAPIKey     string
 	CORSOrigins   string
 	CHAPIKey      string
+	ClearbitKey   string
 	ExportDir     string
 	AuthUser      string
 	AuthPass      string
@@ -54,6 +55,7 @@ func Load() Config {
 		AppAPIKey:     os.Getenv("APP_API_KEY"),
 		CORSOrigins:   env("CORS_ALLOWED_ORIGINS", "*"),
 		CHAPIKey:      os.Getenv("COMPANIES_HOUSE_API_KEY"),
+		ClearbitKey:   os.Getenv("CLEARBIT_API_KEY"),
 		ExportDir:     env("EXPORT_DIR", "/tmp/research-leads/exports"),
 		AuthUser:      os.Getenv("AUTH_USERNAME"),
 		AuthPass:      os.Getenv("AUTH_PASSWORD"),

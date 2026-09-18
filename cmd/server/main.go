@@ -14,6 +14,7 @@ import (
 	"research-leads/internal/api"
 	"research-leads/internal/api/handlers"
 	"research-leads/internal/api/middleware"
+	"research-leads/internal/companies"
 	"research-leads/internal/companyreg"
 	"research-leads/internal/config"
 	"research-leads/internal/db"
@@ -48,6 +49,12 @@ func main() {
 	reg.Register(tools.NewCheckWebsite())
 	reg.Register(tools.NewCheckDomain())
 	reg.Register(tools.NewCompanyLookup(companyreg.New(cfg.CHAPIKey, cfg.APITimeout)))
+	compSvc := &companies.Service{
+		DB:           database,
+		Autocomplete: companies.NewAutocomplete(cfg.APITimeout),
+		Clearbit:     companies.NewClearbit(cfg.ClearbitKey, cfg.APITimeout),
+		Registry:     companyreg.New(cfg.CHAPIKey, cfg.APITimeout),
+	}
 	reg.Register(tools.NewFindEmail(ev))
 	engine := agent.New(database, aiClient, reg, bus, logger, cfg.MaxIterations)
 	engine.Recover(context.Background())
@@ -55,7 +62,7 @@ func main() {
 	if authCfg.Enabled() {
 		logger.Info("ui auth enabled", "user", cfg.AuthUser)
 	}
-	handler := api.Router(database, bus, engine, cfg.CORSOrigins, cfg.AppAPIKey, ev, authCfg)
+	handler := api.Router(database, bus, engine, cfg.CORSOrigins, cfg.AppAPIKey, ev, authCfg, compSvc)
 	srv := &http.Server{Addr: cfg.Host + ":" + cfg.Port, Handler: handler}
 	go func() {
 		logger.Info("listening", "addr", srv.Addr)
