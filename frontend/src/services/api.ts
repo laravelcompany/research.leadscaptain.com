@@ -45,5 +45,19 @@ export const api={
  exportUrl:(params:Record<string,string>={})=>{
   const q=new URLSearchParams(params).toString()
   return '/api/v1/leads/export'+(q?'?'+q:'')
+ },
+ companies:{
+  search:(params:Record<string,string>)=>{
+   const clean:Record<string,string>={}; for(const [k,v] of Object.entries(params)) if(v) clean[k]=v
+   const q=new URLSearchParams(clean).toString()
+   return apiFetch<{results:any[],notes?:string[]}>('/api/v1/companies/search?'+q)
+  },
+  suggest:(q:string)=>apiFetch<{suggestions:any[]}>('/api/v1/companies/suggest?q='+encodeURIComponent(q)),
+  profile:(params:Record<string,string>)=>{
+   const clean:Record<string,string>={}; for(const [k,v] of Object.entries(params)) if(v) clean[k]=v
+   return apiFetch<any>('/api/v1/companies/profile?'+new URLSearchParams(clean).toString())
+  },
+  saveToLead:(body:{company_id?:number,name?:string,domain?:string})=>apiFetch<{lead_id:number,created:boolean}>('/api/v1/companies/save-to-lead',{method:'POST',body:JSON.stringify(body)}),
+  exportUrl:()=>'/api/v1/companies/export',
  }
 }

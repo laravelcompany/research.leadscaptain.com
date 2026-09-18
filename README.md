@@ -151,3 +151,27 @@ go test ./...
 ## Docs
 - docs/architecture.md
 - docs/patents/lead-research-patent-landscape.md
+
+## Companies section
+
+Search for companies by name, domain, industry keywords or location and open a
+merged profile: firmographics from official registries, description and tech
+stack from the company website, and social links (LinkedIn, X, Facebook,
+Crunchbase). Results can be exported to CSV or converted into a lead with one
+click (deduped on company domain).
+
+Data sources (all free by default, nothing is spent):
+
+- **Autocomplete / suggestions** - Clearbit's keyless autocomplete endpoint.
+- **Firmographics** - official European registries via `companyreg` (GB
+  Companies House needs the free key, FR gouv.fr is keyless; a domain's ccTLD
+  routes the lookup when no country is picked).
+- **Description, tech stack, socials** - the company's own homepage
+  (`webcheck`), no API key.
+- **Employee count / revenue** - not available from free sources; set
+  `CLEARBIT_API_KEY` to enrich profiles from the Clearbit Company API. The UI
+  says so honestly when the key is missing.
+
+Endpoints: `GET /api/v1/companies/search`, `GET /api/v1/companies/suggest`,
+`GET /api/v1/companies/profile`, `GET /api/v1/companies` (cache),
+`GET /api/v1/companies/export`, `POST /api/v1/companies/save-to-lead`.

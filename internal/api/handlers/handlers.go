@@ -13,6 +13,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"research-leads/internal/agent"
+	"research-leads/internal/companies"
 	"research-leads/internal/events"
 	"research-leads/internal/leads"
 )
@@ -26,6 +27,8 @@ type Server struct {
 	VerifyEmail func(ctx context.Context, email string) (string, error)
 	// Auth carries the UI login configuration (env-supplied credentials).
 	Auth *AuthConfig
+	// Companies powers the Companies section; nil when not wired (tests).
+	Companies *companies.Service
 }
 
 func (s *Server) Objectives(w http.ResponseWriter, r *http.Request) {

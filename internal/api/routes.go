@@ -15,11 +15,12 @@ import (
 	"research-leads/internal/agent"
 	"research-leads/internal/api/handlers"
 	"research-leads/internal/api/middleware"
+	"research-leads/internal/companies"
 	"research-leads/internal/emailvalidator"
 	"research-leads/internal/events"
 )
 
-func Router(db *sql.DB, bus *events.Bus, engine *agent.Engine, corsOrigins, apiKey string, verifier *emailvalidator.Client, auth *handlers.AuthConfig) http.Handler {
+func Router(db *sql.DB, bus *events.Bus, engine *agent.Engine, corsOrigins, apiKey string, verifier *emailvalidator.Client, auth *handlers.AuthConfig, comp *companies.Service) http.Handler {
 	r := chi.NewRouter()
 	r.Use(func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
@@ -49,7 +50,7 @@ func Router(db *sql.DB, bus *events.Bus, engine *agent.Engine, corsOrigins, apiK
 			next.ServeHTTP(w, req)
 		})
 	})
-	s := &handlers.Server{DB: db, Bus: bus, Engine: engine, Auth: auth}
+	s := &handlers.Server{DB: db, Bus: bus, Engine: engine, Auth: auth, Companies: comp}
 	if verifier != nil {
 		s.VerifyEmail = func(ctx context.Context, email string) (string, error) {
 			res, err := verifier.Verify(ctx, email)
@@ -106,6 +107,12 @@ func Router(db *sql.DB, bus *events.Bus, engine *agent.Engine, corsOrigins, apiK
 		r.Post("/analytics/gap", s.GapAnalysis)
 		r.Get("/leads/stale", s.StaleLeads)
 		r.Get("/leads/{id}/similar", s.SimilarLeads)
+		r.Get("/companies", s.CompaniesList)
+		r.Get("/companies/search", s.CompanySearch)
+		r.Get("/companies/suggest", s.CompanySuggest)
+		r.Get("/companies/profile", s.CompanyProfile)
+		r.Get("/companies/export", s.CompaniesExport)
+		r.Post("/companies/save-to-lead", s.CompanySaveToLead)
 	})
 	staticDir := "frontend/dist"
 	for _, p := range []string{"frontend/dist", "./frontend/dist", "static", "./static", "/app/static"} {
