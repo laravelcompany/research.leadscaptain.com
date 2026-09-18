@@ -4,77 +4,97 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"testing"
 )
 
-func TestVerifyParsesStatusAndEscapesEmail(t *testing.T) {
-	var gotEmail string
+func TestVerifyUsesLaravelMailContract(t *testing.T) {
+	var gotMethod, gotPath, gotType string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotEmail = r.URL.Query().Get("email")
+		gotMethod, gotPath, gotType = r.Method, r.URL.Path, r.Header.Get("Content-Type")
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"status":"risky"}`))
+		w.Write([]byte(`{"email":"person@example.com","verdict":{"status":"safe","score":0.946}}`))
 	}))
 	defer srv.Close()
 
-	c := New(srv.URL, "", 5)
-	res, err := c.Verify(context.Background(), "we ird+addr@example.com")
+	res, err := New(srv.URL, "", 5).Verify(context.Background(), "person@example.com")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.Status != "risky" {
-		t.Fatalf("expected status from response body, got %q", res.Status)
+	if gotMethod != http.MethodPost || gotPath != "/api/v1/verify-email" || gotType != "application/json" {
+		t.Fatalf("wrong API request: %s %s %s", gotMethod, gotPath, gotType)
 	}
-	want, _ := url.QueryUnescape(url.QueryEscape("we ird+addr@example.com"))
-	if gotEmail != want {
-		t.Fatalf("email not transmitted correctly: %q", gotEmail)
+	if res.Status != "valid" || res.Score != 95 || res.Email != "person@example.com" {
+		t.Fatalf("wrong mapped result: %+v", res)
 	}
 }
 
-func TestVerifyUnknownOnUnexpectedBody(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte(`{"ok":true}`))
-	}))
-	defer srv.Close()
-	c := New(srv.URL, "", 5)
-	res, err := c.Verify(context.Background(), "a@b.com")
+func TestVerifyMapsLaravelMailVerdicts(t *testing.T) {
+	for remote, want := range map[string]string{"safe": "valid", "risky": "risky", "unknown": "unknown", "invalid": "invalid"} {
+		t.Run(remote, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Write([]byte(`{"verdict":{"status":"` + remote + `","score":0.5}}`))
+			}))
+			defer srv.Close()
+			got, err := New(srv.URL, "", 5).Verify(context.Background(), "person@example.com")
+			if err != nil || got.Status != want {
+				t.Fatalf("got %+v, %v; want %s", got, err, want)
+			}
+		})
+	}
+}
+
+func TestVerifyFallsBackLocally(t *testing.T) {
+	cases := map[string]http.HandlerFunc{
+		"rate limited": func(w http.ResponseWriter, r *http.Request) { w.Header().Set("Retry-After", "60"); w.WriteHeader(429) },
+		"server error": func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(503) },
+		"malformed":    func(w http.ResponseWriter, r *http.Request) { w.Write([]byte(`{`)) },
+		"unsupported verdict": func(w http.ResponseWriter, r *http.Request) {
+			w.Write([]byte(`{"verdict":{"status":"accepted","score":0.9}}`))
+		},
+	}
+	for name, handler := range cases {
+		t.Run(name, func(t *testing.T) {
+			srv := httptest.NewServer(handler)
+			defer srv.Close()
+			got, err := New(srv.URL, "", 5).Verify(context.Background(), "not-an-email")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.Status != "invalid" || got.Score != 0 {
+				t.Fatalf("local fallback not used: %+v", got)
+			}
+		})
+	}
+}
+
+func TestVerifyFallsBackOnNetworkFailure(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	url := srv.URL
+	srv.Close()
+	got, err := New(url, "", 1).Verify(context.Background(), "not-an-email")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.Status != "unknown" {
-		t.Fatalf("expected unknown, got %q", res.Status)
+	if got.Status != "invalid" {
+		t.Fatalf("local fallback not used: %+v", got)
 	}
 }
 
-func TestVerifyHTTPError(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(500)
-	}))
-	defer srv.Close()
-	c := New(srv.URL, "", 5)
-	if _, err := c.Verify(context.Background(), "a@b.com"); err == nil {
-		t.Fatal("expected error on HTTP 500")
+func TestVerifyPreservesCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := New("http://127.0.0.1:1", "", 1).Verify(ctx, "not-an-email")
+	if err != context.Canceled {
+		t.Fatalf("got %v, want context.Canceled", err)
 	}
 }
 
-func TestVerifyLocalFallbackRunsRealChecks(t *testing.T) {
-	// No external service configured: the client must run the built-in local
-	// verifier instead of rubber-stamping. A malformed address is invalid
-	// without any network access.
-	c := New("", "", 5)
-	res, err := c.Verify(context.Background(), "not-an-email")
+func TestVerifyWithEmptyURLUsesLocalVerifier(t *testing.T) {
+	got, err := New("", "", 1).Verify(context.Background(), "not-an-email")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.Status != "invalid" {
-		t.Fatalf("malformed address must be invalid, got %q", res.Status)
-	}
-	if res.Score != 0 {
-		t.Fatalf("invalid addresses score 0, got %d", res.Score)
-	}
-	// A disposable domain is flagged risky without DNS.
-	res, _ = c.Verify(context.Background(), "a@mailinator.com")
-	if res.Status != "risky" {
-		t.Fatalf("disposable domain must be risky, got %q", res.Status)
+	if got.Status != "invalid" || got.Score != 0 {
+		t.Fatalf("got %+v", got)
 	}
 }

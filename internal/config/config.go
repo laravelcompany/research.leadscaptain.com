@@ -6,6 +6,8 @@ import (
 	"strings"
 )
 
+const emailValidatorDefaultURL = "https://validation.laravelmail.com"
+
 type Config struct {
 	Env            string
 	Host           string
@@ -48,7 +50,7 @@ func Load() Config {
 		AIAPIKey:       os.Getenv("AI_API_KEY"),
 		LCBaseURL:      env("LEADSCAPTAIN_BASE_URL", "https://api.leadscaptain.com"),
 		LCAPIToken:     os.Getenv("LEADSCAPTAIN_API_TOKEN"),
-		EmailValURL:    os.Getenv("EMAIL_VALIDATION_URL"),
+		EmailValURL:    env("EMAIL_VALIDATION_URL", emailValidatorDefaultURL),
 		EmailValKey:    os.Getenv("EMAIL_VALIDATION_API_KEY"),
 		EmailSMTPProbe: envBool("EMAIL_SMTP_PROBE", true),
 		EmailSMTPHelo:  env("EMAIL_SMTP_HELO", "localhost.localdomain"),

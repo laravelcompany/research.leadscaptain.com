@@ -138,8 +138,8 @@ curl -N -b cookies.txt 'localhost:7001/api/v1/events?objective_id=42'
 - Lead search requires `LEADSCAPTAIN_API_TOKEN`; the base URL defaults to
   `https://api.leadscaptain.com`.
 - Ingestion order per lead: check the company website is still up, verify the
-  email address, then score with both verdicts. Without `EMAIL_VALIDATION_URL`
-  the pipeline uses the built-in verifier (syntax, disposable/role, MX, plus
+  email address, then score with both verdicts. The pipeline uses `https://validation.laravelmail.com/api/v1/verify-email` first (override the base with `EMAIL_VALIDATION_URL`) and falls back to the
+  built-in verifier on API errors (syntax, disposable/role, MX, plus
   an SMTP recipient probe with catch-all detection) - nothing is left
   silently `unchecked`. Set `EMAIL_SMTP_PROBE=0` to skip SMTP probing (some
   hosts block outbound port 25; the prober detects that and disables itself
@@ -205,8 +205,9 @@ Utility tools for manual research and validation, all free to run:
   identification (Gmail, Outlook/Microsoft 365, Yahoo, Proton and corporate
   gateways), SMTP recipient probing with catch-all detection (when
   `EMAIL_SMTP_PROBE` is on), disposable-domain and role-address flags ->
-  Valid / Invalid / Risky / Unknown. No external verification API needed.
-  (`EMAIL_VALIDATION_URL` still overrides for the lead pipeline.)
+  Valid / Invalid / Risky / Unknown. The lead pipeline uses `validation.laravelmail.com` first and falls back to
+  these local checks if it is unavailable. `EMAIL_VALIDATION_URL` overrides the
+  service base URL.
 - **Domain age checker** - creation date, expiry and registrar from RDAP
   (rdap.org bootstrap, free and keyless, the registry-run successor to WHOIS).
 - **LinkedIn URL formatter** - normalizes any LinkedIn profile/company link

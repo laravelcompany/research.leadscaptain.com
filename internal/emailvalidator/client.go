@@ -1,15 +1,18 @@
 package emailvalidator
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
+	"math"
 	"net/http"
-	"net/url"
+	"strings"
 	"time"
 
 	"research-leads/internal/researchtools"
 )
+
+const DefaultBaseURL = "https://validation.laravelmail.com"
 
 type Client struct {
 	baseURL string
@@ -18,12 +21,11 @@ type Client struct {
 	local   *researchtools.Verifier
 }
 
-// New builds a client for an external validation service. When baseURL is
-// empty the client verifies locally instead (syntax, MX, optional SMTP probe)
-// via local - or a DNS-only verifier when local is nil - so every caller gets
-// real checks without a paid provider.
+// New builds a client that uses LaravelMail's validation API first. If the
+// service is unavailable or returns an unusable response, Verify falls back to
+// the built-in verifier so lead ingestion can still finish with a real verdict.
 func New(baseURL, apiKey string, timeout int, local ...*researchtools.Verifier) *Client {
-	c := &Client{baseURL: baseURL, apiKey: apiKey, http: &http.Client{Timeout: time.Duration(timeout) * time.Second}}
+	c := &Client{baseURL: strings.TrimRight(strings.TrimSpace(baseURL), "/"), apiKey: apiKey, http: &http.Client{Timeout: time.Duration(timeout) * time.Second}}
 	if len(local) > 0 && local[0] != nil {
 		c.local = local[0]
 	} else {
@@ -32,7 +34,6 @@ func New(baseURL, apiKey string, timeout int, local ...*researchtools.Verifier) 
 	return c
 }
 
-// localScores give the agent's score hint per local verdict status.
 var localScores = map[string]int{"valid": 90, "risky": 50, "unknown": 30, "invalid": 0}
 
 type Result struct {
@@ -41,46 +42,75 @@ type Result struct {
 	Score  int    `json:"score"`
 }
 
-// Verify checks one email address. Without a configured base URL it runs the
-// built-in local verifier (syntax, disposable/role heuristics, MX, and an
-// optional SMTP probe) so no address is ever silently rubber-stamped.
-func (c *Client) Verify(ctx context.Context, email string) (Result, error) {
-	if c.baseURL == "" {
-		v := c.local.Verify(ctx, email)
-		return Result{Email: v.Email, Status: v.Status, Score: localScores[v.Status]}, nil
+type apiResponse struct {
+	Email   string `json:"email"`
+	Verdict struct {
+		Status string  `json:"status"`
+		Score  float64 `json:"score"`
+	} `json:"verdict"`
+}
+
+func (c *Client) endpoint() string {
+	if strings.HasSuffix(c.baseURL, "/api/v1/verify-email") {
+		return c.baseURL
 	}
-	req, err := http.NewRequestWithContext(ctx, "GET", c.baseURL+"/verify?email="+url.QueryEscape(email), nil)
-	if err != nil {
+	return c.baseURL + "/api/v1/verify-email"
+}
+
+func (c *Client) verifyLocal(ctx context.Context, email string) (Result, error) {
+	if err := ctx.Err(); err != nil {
 		return Result{}, err
 	}
+	v := c.local.Verify(ctx, email)
+	return Result{Email: v.Email, Status: v.Status, Score: localScores[v.Status]}, nil
+}
+
+// Verify checks LaravelMail first and falls back locally on network failures,
+// non-2xx responses, malformed JSON, or an unsupported verdict. It does not
+// retry 429s, respecting the service's Retry-After rate-limit contract.
+func (c *Client) Verify(ctx context.Context, email string) (Result, error) {
+	if c.baseURL == "" {
+		return c.verifyLocal(ctx, email)
+	}
+	payload, err := json.Marshal(map[string]string{"email": email})
+	if err != nil {
+		return c.verifyLocal(ctx, email)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint(), bytes.NewReader(payload))
+	if err != nil {
+		return c.verifyLocal(ctx, email)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	// The current LaravelMail service is keyless. Keep support for a key so a
+	// deployment can add auth without another client change.
 	if c.apiKey != "" {
 		req.Header.Set("Authorization", "Bearer "+c.apiKey)
 	}
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return Result{}, err
+		if ctx.Err() != nil {
+			return Result{}, ctx.Err()
+		}
+		return c.verifyLocal(ctx, email)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode >= 400 {
-		return Result{}, fmt.Errorf("email validator status %d", resp.StatusCode)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return c.verifyLocal(ctx, email)
 	}
-	// Validation services do not share one response schema; accept the common
-	// verdict fields and report anything else as unknown rather than pretending
-	// the address is valid.
-	var body map[string]any
+
+	var body apiResponse
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
-		return Result{Email: email, Status: "unknown"}, nil
+		return c.verifyLocal(ctx, email)
 	}
-	for _, key := range []string{"status", "result", "verdict", "email_status", "state"} {
-		if v, ok := body[key].(string); ok && v != "" {
-			return Result{Email: email, Status: v}, nil
-		}
+	status := map[string]string{
+		"safe": "valid", "risky": "risky", "unknown": "unknown", "invalid": "invalid",
+	}[strings.ToLower(body.Verdict.Status)]
+	if status == "" || math.IsNaN(body.Verdict.Score) || math.IsInf(body.Verdict.Score, 0) || body.Verdict.Score < 0 || body.Verdict.Score > 1 {
+		return c.verifyLocal(ctx, email)
 	}
-	if v, ok := body["valid"].(bool); ok {
-		if v {
-			return Result{Email: email, Status: "valid"}, nil
-		}
-		return Result{Email: email, Status: "invalid"}, nil
+	verifiedEmail := body.Email
+	if verifiedEmail == "" {
+		verifiedEmail = email
 	}
-	return Result{Email: email, Status: "unknown"}, nil
+	return Result{Email: verifiedEmail, Status: status, Score: int(math.Round(body.Verdict.Score * 100))}, nil
 }
