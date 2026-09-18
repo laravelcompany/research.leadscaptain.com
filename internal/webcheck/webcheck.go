@@ -27,7 +27,10 @@ type Result struct {
 	PoweredBy    string      `json:"powered_by"`
 	Technologies []string    `json:"technologies"`
 	Socials      SocialLinks `json:"socials"`
-	Error        string      `json:"error,omitempty"`
+	// Parked is true when the page looks like a parked or for-sale domain
+	// placeholder rather than a real company site.
+	Parked bool   `json:"parked"`
+	Error  string `json:"error,omitempty"`
 }
 
 var (
@@ -59,6 +62,15 @@ var fingerprints = []struct {
 	{"Stripe", []string{"js.stripe.com"}},
 	{"Google Analytics", []string{"googletagmanager.com", "google-analytics.com"}},
 	{"jQuery", []string{"jquery"}},
+}
+
+// parkedMarkers are substrings typical of parked or for-sale domain
+// placeholders. Matching is case-insensitive against the page HTML.
+var parkedMarkers = []string{
+	"domain is for sale", "domain may be for sale", "buy this domain",
+	"this domain is parked", "parked by", "sedoparking", "parkingcrew",
+	"bodis.com", "afternic.com", "hugedomains.com", "dan.com",
+	"domainname sales", "inquire about this domain",
 }
 
 // Check fetches https://domain (falling back to http) and extracts signals.
@@ -123,7 +135,14 @@ func Check(ctx context.Context, domain string) Result {
 		res.Generator = clean(m[1])
 	}
 	res.Socials = ExtractSocials(html)
-	haystack := strings.ToLower(html + " " + res.Server + " " + res.PoweredBy)
+	lowerHTML := strings.ToLower(html)
+	for _, m := range parkedMarkers {
+		if strings.Contains(lowerHTML, m) {
+			res.Parked = true
+			break
+		}
+	}
+	haystack := lowerHTML + " " + strings.ToLower(res.Server+" "+res.PoweredBy)
 	seen := map[string]bool{}
 	for _, fp := range fingerprints {
 		for _, h := range fp.Hints {

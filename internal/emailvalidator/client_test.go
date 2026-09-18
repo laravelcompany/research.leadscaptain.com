@@ -56,3 +56,25 @@ func TestVerifyHTTPError(t *testing.T) {
 		t.Fatal("expected error on HTTP 500")
 	}
 }
+
+func TestVerifyLocalFallbackRunsRealChecks(t *testing.T) {
+	// No external service configured: the client must run the built-in local
+	// verifier instead of rubber-stamping. A malformed address is invalid
+	// without any network access.
+	c := New("", "", 5)
+	res, err := c.Verify(context.Background(), "not-an-email")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Status != "invalid" {
+		t.Fatalf("malformed address must be invalid, got %q", res.Status)
+	}
+	if res.Score != 0 {
+		t.Fatalf("invalid addresses score 0, got %d", res.Score)
+	}
+	// A disposable domain is flagged risky without DNS.
+	res, _ = c.Verify(context.Background(), "a@mailinator.com")
+	if res.Status != "risky" {
+		t.Fatalf("disposable domain must be risky, got %q", res.Status)
+	}
+}

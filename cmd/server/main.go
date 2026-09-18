@@ -38,7 +38,14 @@ func main() {
 	bus := events.New()
 	aiClient := ai.New(cfg.AIBaseURL, cfg.AIAPIKey, cfg.AIModel, cfg.AITimeout)
 	lc := leadscaptain.New(cfg.LCBaseURL, cfg.LCAPIToken, cfg.APITimeout)
-	ev := emailvalidator.New(cfg.EmailValURL, cfg.EmailValKey, cfg.APITimeout)
+	var prober *researchtools.SMTPProber
+	if cfg.EmailSMTPProbe {
+		prober = &researchtools.SMTPProber{Helo: cfg.EmailSMTPHelo, From: cfg.EmailSMTPFrom, Timeout: 8 * time.Second}
+	} else {
+		logger.Info("smtp email probing disabled", "env", "EMAIL_SMTP_PROBE")
+	}
+	localVerifier := &researchtools.Verifier{Prober: prober}
+	ev := emailvalidator.New(cfg.EmailValURL, cfg.EmailValKey, cfg.APITimeout, localVerifier)
 	reg := tools.NewRegistry()
 	reg.Register(tools.NewSearch(lc))
 	reg.Register(tools.NewVerify(ev))
@@ -64,6 +71,9 @@ func main() {
 		logger.Info("ui auth enabled", "user", cfg.AuthUser)
 	}
 	toolsSvc := researchtools.NewService(database, cfg.APITimeout)
+	// The Tools page verifies through the same shared verifier (SMTP probe
+	// included) so its verdicts match what the lead pipeline records.
+	toolsSvc.Verify = localVerifier.Verify
 	handler := api.Router(database, bus, engine, cfg.CORSOrigins, cfg.AppAPIKey, ev, authCfg, compSvc, toolsSvc)
 	srv := &http.Server{Addr: cfg.Host + ":" + cfg.Port, Handler: handler}
 	go func() {

@@ -282,38 +282,65 @@ func (e *Engine) handleResult(ctx context.Context, objectiveID int64, action str
 			if loc == "" {
 				loc = city
 			}
-			sc := scoring.ScoreWithSummary(title, ind, loc, "unchecked", dom, summary, []string{title}, []string{ind}, []string{cc, city})
-			if summary != "" && len(summary) > 50 {
-				sc.Score += 2
-			}
-			if strings.TrimSpace(summary) == "" {
-				sc.Score = sc.Score - 5
-				if sc.Score < 0 {
-					sc.Score = 0
-				}
-			}
-			_, _ = e.db.ExecContext(ctx, `INSERT OR IGNORE INTO leads(external_key,first_name,last_name,email,company_name,company_domain,position_title,linkedin_url,city,country_code,industry_name,summary,source,lead_score,score_breakdown,email_status,objective_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, ext, fn, ln, email, comp, dom, title, li, city, cc, ind, summary, "leadscaptain", sc.Score, sc.JSON(), "unchecked", objectiveID)
-			// Skip re-verification when this email already carries a verdict;
-			// verification calls cost money or rate budget on real providers.
-			var existingStatus string
-			e.db.QueryRowContext(ctx, "SELECT COALESCE(email_status,'') FROM leads WHERE email=? AND email_status IS NOT NULL AND email_status!='unchecked' LIMIT 1", email).Scan(&existingStatus)
-			vparams, _ := json.Marshal(map[string]string{"email": email})
-			if vr, err := e.registry.Execute(ctx, "verify_email", json.RawMessage(vparams)); err == nil && existingStatus == "" {
-				bv, _ := json.Marshal(vr)
-				var vm map[string]any
-				json.Unmarshal(bv, &vm)
-				st, _ := vm["Status"].(string)
-				if st == "" {
-					st, _ = vm["status"].(string)
-				}
-				if st != "" {
-					e.db.ExecContext(ctx, `UPDATE leads SET email_status=? WHERE email=?`, st, email)
-					if st == "valid" {
-						e.db.ExecContext(ctx, `UPDATE leads SET lead_score=85 WHERE email=? AND lead_score<85`, email)
-					} else if st == "invalid" {
-						e.db.ExecContext(ctx, `UPDATE leads SET lead_score=10 WHERE email=?`, email)
+			// Check the company site is still up before verifying the email:
+			// lead found -> check website -> check email -> score. A verdict
+			// already stored for this domain is reused, matching the email
+			// reuse below, so one batch costs one fetch per domain.
+			websiteStatus, freshSite := "unchecked", false
+			if dom != "" {
+				var existingSite string
+				e.db.QueryRowContext(ctx, "SELECT COALESCE(website_status,'') FROM leads WHERE company_domain=? AND website_status IS NOT NULL AND website_status!='' AND website_status!='unchecked' LIMIT 1", dom).Scan(&existingSite)
+				if existingSite != "" {
+					websiteStatus = existingSite
+				} else {
+					wparams, _ := json.Marshal(map[string]string{"domain": dom})
+					if wr, err := e.registry.Execute(ctx, "check_website", json.RawMessage(wparams)); err == nil {
+						bw, _ := json.Marshal(wr)
+						var wm map[string]any
+						if json.Unmarshal(bw, &wm) == nil && len(wm) > 0 {
+							websiteStatus = classifyWebsite(wm)
+							freshSite = true
+						}
 					}
 				}
+			}
+			// Verify the address before scoring so the stored status and score
+			// reflect a real check instead of the "unchecked" placeholder. A
+			// verdict already stored for this email is reused: verification
+			// calls cost money or rate budget on real providers.
+			emailStatus, freshVerdict := "unchecked", ""
+			if email != "" {
+				var existingStatus string
+				e.db.QueryRowContext(ctx, "SELECT COALESCE(email_status,'') FROM leads WHERE email=? AND email_status IS NOT NULL AND email_status!='unchecked' LIMIT 1", email).Scan(&existingStatus)
+				if existingStatus != "" {
+					emailStatus = existingStatus
+				} else {
+					vparams, _ := json.Marshal(map[string]string{"email": email})
+					if vr, err := e.registry.Execute(ctx, "verify_email", json.RawMessage(vparams)); err == nil {
+						bv, _ := json.Marshal(vr)
+						var vm map[string]any
+						json.Unmarshal(bv, &vm)
+						st, _ := vm["Status"].(string)
+						if st == "" {
+							st, _ = vm["status"].(string)
+						}
+						if st != "" {
+							emailStatus, freshVerdict = st, st
+						}
+					}
+				}
+			}
+			sc := scoring.ScoreWithSummary(title, ind, loc, emailStatus, dom, websiteStatus, summary, []string{title}, []string{ind}, []string{cc, city})
+			sc.Score = adjustForSummary(sc.Score, summary)
+			_, _ = e.db.ExecContext(ctx, `INSERT OR IGNORE INTO leads(external_key,first_name,last_name,email,company_name,company_domain,position_title,linkedin_url,city,country_code,industry_name,summary,source,lead_score,score_breakdown,email_status,website_status,objective_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, ext, fn, ln, email, comp, dom, title, li, city, cc, ind, summary, "leadscaptain", sc.Score, sc.JSON(), emailStatus, websiteStatus, objectiveID)
+			// Propagate fresh verdicts to every other row carrying this
+			// address or domain and rescore them with the standard scorer -
+			// never hard-coded values - so the breakdown stays auditable.
+			if freshVerdict != "" {
+				e.rescoreLeads(ctx, "email=?", email, freshVerdict, "")
+			}
+			if freshSite && websiteStatus != "unchecked" {
+				e.rescoreLeads(ctx, "company_domain=? AND (website_status IS NULL OR website_status='' OR website_status='unchecked')", dom, "", websiteStatus)
 			}
 			pend = append(pend, pendingLead{Email: email, FirstName: fn, LastName: ln, Company: comp, Title: title, Summary: summary, City: city, Country: cc})
 		}
@@ -450,5 +477,95 @@ func (e *Engine) Recover(ctx context.Context) {
 		var runID, objID int64
 		rows.Scan(&runID, &objID)
 		go e.loop(runID, objID, e.lastIteration(ctx, runID))
+	}
+}
+
+// adjustForSummary applies the ingestion-time summary tweaks shared by the
+// initial insert and the post-verification rescore so both agree on a score.
+func adjustForSummary(score int, summary string) int {
+	if summary != "" && len(summary) > 50 {
+		score += 2
+	}
+	if strings.TrimSpace(summary) == "" {
+		score -= 5
+		if score < 0 {
+			score = 0
+		}
+	}
+	return score
+}
+
+// classifyWebsite maps a check_website tool result to the stored website
+// status: live, parked, error (HTTP >= 400), unreachable, or unchecked when
+// the tool returned nothing usable.
+func classifyWebsite(result map[string]any) string {
+	reachable, _ := result["reachable"].(bool)
+	if !reachable {
+		return "unreachable"
+	}
+	if parked, _ := result["parked"].(bool); parked {
+		return "parked"
+	}
+	if code, _ := result["status_code"].(float64); code >= 400 {
+		return "error"
+	}
+	return "live"
+}
+
+// rescoreLeads propagates fresh verdicts to the leads matched by where and
+// recomputes each row's score with the standard scorer. A non-empty
+// emailStatus or websiteStatus overwrites the row's stored value (and stamps
+// its verified/checked time); an empty one keeps the row's value. Verification
+// moves the score through the same breakdown as every other factor, and drift
+// is recorded in lead_score_history.
+func (e *Engine) rescoreLeads(ctx context.Context, where string, arg any, emailStatus, websiteStatus string) {
+	rows, err := e.db.QueryContext(ctx, `SELECT id,COALESCE(position_title,''),COALESCE(industry_name,''),COALESCE(country_code,''),COALESCE(city,''),COALESCE(company_domain,''),COALESCE(summary,''),COALESCE(email_status,''),COALESCE(website_status,''),lead_score FROM leads WHERE `+where, arg)
+	if err != nil {
+		return
+	}
+	// Buffer before writing: sqlite runs on one connection, so updating while
+	// the read is still open would deadlock.
+	type leadRow struct {
+		id                                 int64
+		title, ind, cc, city, dom, summary string
+		es, ws                             string
+		oldScore                           int
+	}
+	var batch []leadRow
+	for rows.Next() {
+		var r leadRow
+		if rows.Scan(&r.id, &r.title, &r.ind, &r.cc, &r.city, &r.dom, &r.summary, &r.es, &r.ws, &r.oldScore) == nil {
+			batch = append(batch, r)
+		}
+	}
+	rows.Close()
+	for _, row := range batch {
+		id, title, ind, cc, city, dom, summary, es, ws, oldScore := row.id, row.title, row.ind, row.cc, row.city, row.dom, row.summary, row.es, row.ws, row.oldScore
+		if emailStatus != "" {
+			es = emailStatus
+		}
+		if websiteStatus != "" {
+			ws = websiteStatus
+		}
+		loc := cc
+		if loc == "" {
+			loc = city
+		}
+		r := scoring.ScoreWithSummary(title, ind, loc, es, dom, ws, summary, []string{title}, []string{ind}, []string{cc, city})
+		r.Score = adjustForSummary(r.Score, summary)
+		q := `UPDATE leads SET email_status=?, website_status=?, lead_score=?, score_breakdown=?, updated_at=CURRENT_TIMESTAMP`
+		if emailStatus != "" {
+			q += `, email_verified_at=CURRENT_TIMESTAMP`
+		}
+		if websiteStatus != "" {
+			q += `, website_checked_at=CURRENT_TIMESTAMP`
+		}
+		q += ` WHERE id=?`
+		if _, err := e.db.ExecContext(ctx, q, es, ws, r.Score, r.JSON(), id); err != nil {
+			continue
+		}
+		if oldScore != r.Score {
+			e.db.ExecContext(ctx, "INSERT INTO lead_score_history(lead_id,score_type,old_score,new_score,breakdown) VALUES(?,?,?,?,?)", id, "lead", oldScore, r.Score, r.JSON())
+		}
 	}
 }

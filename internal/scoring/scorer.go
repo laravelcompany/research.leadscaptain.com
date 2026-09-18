@@ -12,7 +12,7 @@ type Result struct {
 	Breakdown Breakdown `json:"breakdown"`
 }
 
-func Score(title, industry, location, emailStatus, companyDomain string, targetTitles, targetIndustries, targetLocations []string) Result {
+func Score(title, industry, location, emailStatus, companyDomain, websiteStatus string, targetTitles, targetIndustries, targetLocations []string) Result {
 	b := Breakdown{}
 	score := 0
 	if containsFold(targetTitles, title) {
@@ -33,6 +33,10 @@ func Score(title, industry, location, emailStatus, companyDomain string, targetT
 	} else if emailStatus == "invalid" {
 		b["invalid_email"] = -30
 		score -= 30
+	} else if emailStatus == "risky" {
+		// Catch-all, disposable or role address: reachable but low value.
+		b["risky_email"] = -10
+		score -= 10
 	} else if strings.Contains(emailStatus, "generic") {
 		b["generic_email"] = -20
 		score -= 20
@@ -40,6 +44,20 @@ func Score(title, industry, location, emailStatus, companyDomain string, targetT
 	if companyDomain != "" {
 		b["company_domain"] = 10
 		score += 10
+	}
+	switch websiteStatus {
+	case "live":
+		b["website_live"] = 5
+		score += 5
+	case "parked":
+		b["parked_website"] = -15
+		score -= 15
+	case "unreachable":
+		b["dead_website"] = -10
+		score -= 10
+	case "error":
+		b["website_error"] = -5
+		score -= 5
 	}
 	if score < 0 {
 		score = 0
@@ -49,8 +67,8 @@ func Score(title, industry, location, emailStatus, companyDomain string, targetT
 	}
 	return Result{Score: score, Breakdown: b}
 }
-func ScoreWithSummary(title, industry, location, emailStatus, companyDomain, summary string, targetTitles, targetIndustries, targetLocations []string) Result {
-	r := Score(title, industry, location, emailStatus, companyDomain, targetTitles, targetIndustries, targetLocations)
+func ScoreWithSummary(title, industry, location, emailStatus, companyDomain, websiteStatus, summary string, targetTitles, targetIndustries, targetLocations []string) Result {
+	r := Score(title, industry, location, emailStatus, companyDomain, websiteStatus, targetTitles, targetIndustries, targetLocations)
 	if len(summary) > 200 {
 		r.Breakdown["rich_summary"] = 10
 		r.Score += 10
