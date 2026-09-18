@@ -257,7 +257,7 @@ func (s *Server) Leads(w http.ResponseWriter, r *http.Request) {
 	if strings.EqualFold(q.Get("direction"), "asc") {
 		dir = "ASC"
 	}
-	query := `SELECT id,objective_id,external_key,first_name,last_name,full_name,email,email_status,phone,company_name,company_domain,position_title,department,industry_name,country_code,country_name,city,linkedin_url,website_url,lead_score,score_breakdown,source,raw_data,status,summary,outreach_message,created_at,updated_at FROM leads WHERE ` + clause + " ORDER BY " + sort + " " + dir + " LIMIT ? OFFSET ?"
+	query := `SELECT id,objective_id,external_key,first_name,last_name,full_name,email,email_status,phone,company_name,company_domain,position_title,department,industry_name,country_code,country_name,city,linkedin_url,website_url,lead_score,score_breakdown,source,raw_data,status,summary,outreach_message,created_at,updated_at,website_status FROM leads WHERE ` + clause + " ORDER BY " + sort + " " + dir + " LIMIT ? OFFSET ?"
 	rows, err := s.DB.Query(query, append(args, per, (page-1)*per)...)
 	if err != nil {
 		writeError(w, 500, err.Error())
@@ -268,11 +268,11 @@ func (s *Server) Leads(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var id, score int64
 		var objective sql.NullInt64
-		var vals [26]sql.NullString
-		if err := rows.Scan(&id, &objective, &vals[0], &vals[1], &vals[2], &vals[3], &vals[4], &vals[5], &vals[6], &vals[7], &vals[8], &vals[9], &vals[10], &vals[11], &vals[12], &vals[13], &vals[14], &vals[15], &vals[16], &score, &vals[17], &vals[18], &vals[19], &vals[20], &vals[21], &vals[22], &vals[23], &vals[24]); err != nil {
+		var vals [27]sql.NullString
+		if err := rows.Scan(&id, &objective, &vals[0], &vals[1], &vals[2], &vals[3], &vals[4], &vals[5], &vals[6], &vals[7], &vals[8], &vals[9], &vals[10], &vals[11], &vals[12], &vals[13], &vals[14], &vals[15], &vals[16], &score, &vals[17], &vals[18], &vals[19], &vals[20], &vals[21], &vals[22], &vals[23], &vals[24], &vals[25]); err != nil {
 			continue
 		}
-		keys := []string{"external_key", "first_name", "last_name", "full_name", "email", "email_status", "phone", "company_name", "company_domain", "position_title", "department", "industry_name", "country_code", "country_name", "city", "linkedin_url", "website_url", "score_breakdown", "source", "raw_data", "status", "summary", "outreach_message", "created_at", "updated_at"}
+		keys := []string{"external_key", "first_name", "last_name", "full_name", "email", "email_status", "phone", "company_name", "company_domain", "position_title", "department", "industry_name", "country_code", "country_name", "city", "linkedin_url", "website_url", "score_breakdown", "source", "raw_data", "status", "summary", "outreach_message", "created_at", "updated_at", "website_status"}
 		m := map[string]any{"id": id, "lead_score": score}
 		if objective.Valid {
 			m["objective_id"] = objective.Int64

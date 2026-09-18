@@ -13,12 +13,12 @@ is built from the registry, so tools and docs never drift):
 | Tool | Purpose | Key required? |
 | --- | --- | --- |
 | `search_leads` | Search `api.leadscaptain.com` | LeadsCaptain token |
-| `verify_email` | Verify one address | validator key |
+| `verify_email` | Verify one address: syntax, disposable/role, MX, SMTP probe + catch-all | no (external service optional) |
 | `find_email` | Generate + verify common patterns for a person at a domain | no |
 | `get_lead` / `list_leads` | Inspect stored leads | no |
 | `score_lead` | Recompute + persist a lead's score, with history | no |
 | `export_leads` | Write filtered leads to CSV under `EXPORT_DIR` | no |
-| `check_website` | Site liveness, title, description, tech fingerprints | no |
+| `check_website` | Site liveness, parked/for-sale detection, title, description, tech fingerprints | no |
 | `check_domain` | MX / SPF / DMARC posture + mail-provider guess | no |
 | `company_lookup` | European company registries, routed by country | see below |
 | `get_statistics` | Aggregate counts | no |
@@ -136,8 +136,16 @@ curl -N -b cookies.txt 'localhost:7001/api/v1/events?objective_id=42'
 - `POST /api/v1/leads/search` runs a whitelisted filter query
   (`{"filters":[{"field":"title","operator":"CONTAINS","value":"CTO"}]}`).
 - Lead search requires `LEADSCAPTAIN_API_TOKEN`; the base URL defaults to
-  `https://api.leadscaptain.com`. Email validation keeps its deterministic
-  local fallback when `EMAIL_VALIDATION_URL` is unset.
+  `https://api.leadscaptain.com`.
+- Ingestion order per lead: check the company website is still up, verify the
+  email address, then score with both verdicts. The pipeline uses `https://validation.laravelmail.com/api/v1/verify-email` first (override the base with `EMAIL_VALIDATION_URL`) and falls back to the
+  built-in verifier on API errors (syntax, disposable/role, MX, plus
+  an SMTP recipient probe with catch-all detection) - nothing is left
+  silently `unchecked`. Set `EMAIL_SMTP_PROBE=0` to skip SMTP probing (some
+  hosts block outbound port 25; the prober detects that and disables itself
+  for the run). `EMAIL_SMTP_HELO` / `EMAIL_SMTP_FROM` tune the probe
+  handshake. Verification verdicts rescore leads through the standard score
+  breakdown (recorded in `lead_score_history`), never hard-coded values.
 - Id-less leads from a provider dedupe by email (fallback external key), and
   addresses with an existing verdict are not re-verified.
 - `company_lookup` fails safe with a clear error when a route is not
@@ -195,9 +203,11 @@ Utility tools for manual research and validation, all free to run:
 
 - **Email verification** - syntax check, MX record lookup, provider
   identification (Gmail, Outlook/Microsoft 365, Yahoo, Proton and corporate
-  gateways), disposable-domain and role-address flags -> Valid / Invalid /
-  Risky / Unknown. No external verification API needed. (`EMAIL_VALIDATION_URL`
-  still overrides for the lead pipeline.)
+  gateways), SMTP recipient probing with catch-all detection (when
+  `EMAIL_SMTP_PROBE` is on), disposable-domain and role-address flags ->
+  Valid / Invalid / Risky / Unknown. The lead pipeline uses `validation.laravelmail.com` first and falls back to
+  these local checks if it is unavailable. `EMAIL_VALIDATION_URL` overrides the
+  service base URL.
 - **Domain age checker** - creation date, expiry and registrar from RDAP
   (rdap.org bootstrap, free and keyless, the registry-run successor to WHOIS).
 - **LinkedIn URL formatter** - normalizes any LinkedIn profile/company link

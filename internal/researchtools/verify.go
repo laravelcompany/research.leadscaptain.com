@@ -18,6 +18,9 @@ type EmailVerdict struct {
 	MXFound  bool     `json:"mx_found"`
 	MXHosts  []string `json:"mx_hosts,omitempty"`
 	Reason   string   `json:"reason,omitempty"`
+	// SMTP holds the deliverability probe verdict (one of the SMTP* constants)
+	// when SMTP probing ran; empty when probing is disabled or not applicable.
+	SMTP string `json:"smtp,omitempty"`
 }
 
 // disposableDomains are throwaway providers; mail to them is deliverable but
@@ -123,4 +126,45 @@ func VerifyEmail(ctx context.Context, email string, lookup MXLookup) EmailVerdic
 		v.Reason = "role address, not a person"
 	}
 	return v
+}
+
+// Verifier is the shared email checker: VerifyEmail's keyless syntax/MX
+// stage, optionally followed by an SMTP deliverability probe when a Prober is
+// attached. A nil Prober keeps the DNS-only behavior.
+type Verifier struct {
+	Lookup MXLookup
+	Prober *SMTPProber
+}
+
+// Verify runs syntax, disposable/role and MX checks, then - when the domain
+// accepts mail and a Prober is configured - an SMTP probe of the mailbox
+// itself, including catch-all detection. SMTP results refine the verdict:
+// deliverable confirms valid, undeliverable marks invalid, catch-all marks
+// risky (the address cannot be distinguished from a dead one).
+func (v *Verifier) Verify(ctx context.Context, email string) EmailVerdict {
+	var lookup MXLookup
+	if v != nil {
+		lookup = v.Lookup
+	}
+	verdict := VerifyEmail(ctx, email, lookup)
+	if v == nil || v.Prober == nil || !verdict.MXFound || verdict.Status != "valid" {
+		return verdict
+	}
+	st, reason := v.Prober.Probe(ctx, verdict.Email, verdict.MXHosts)
+	verdict.SMTP = st
+	switch st {
+	case SMTPDeliverable:
+		verdict.Reason = reason
+	case SMTPUndeliverable:
+		verdict.Status = "invalid"
+		verdict.Reason = reason
+	case SMTPCatchAll:
+		verdict.Status = "risky"
+		verdict.Reason = reason
+	case SMTPUnknown:
+		verdict.Reason += " (SMTP inconclusive: " + reason + ")"
+	case SMTPSkipped:
+		verdict.Reason += " (SMTP not probed: port 25 unreachable from this host)"
+	}
+	return verdict
 }
