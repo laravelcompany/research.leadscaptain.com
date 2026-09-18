@@ -18,9 +18,10 @@ import (
 	"research-leads/internal/companies"
 	"research-leads/internal/emailvalidator"
 	"research-leads/internal/events"
+	"research-leads/internal/researchtools"
 )
 
-func Router(db *sql.DB, bus *events.Bus, engine *agent.Engine, corsOrigins, apiKey string, verifier *emailvalidator.Client, auth *handlers.AuthConfig, comp *companies.Service) http.Handler {
+func Router(db *sql.DB, bus *events.Bus, engine *agent.Engine, corsOrigins, apiKey string, verifier *emailvalidator.Client, auth *handlers.AuthConfig, comp *companies.Service, toolsSvc *researchtools.Service) http.Handler {
 	r := chi.NewRouter()
 	r.Use(func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
@@ -50,7 +51,7 @@ func Router(db *sql.DB, bus *events.Bus, engine *agent.Engine, corsOrigins, apiK
 			next.ServeHTTP(w, req)
 		})
 	})
-	s := &handlers.Server{DB: db, Bus: bus, Engine: engine, Auth: auth, Companies: comp}
+	s := &handlers.Server{DB: db, Bus: bus, Engine: engine, Auth: auth, Companies: comp, Tools: toolsSvc}
 	if verifier != nil {
 		s.VerifyEmail = func(ctx context.Context, email string) (string, error) {
 			res, err := verifier.Verify(ctx, email)
@@ -116,6 +117,11 @@ func Router(db *sql.DB, bus *events.Bus, engine *agent.Engine, corsOrigins, apiK
 		r.Post("/websites/analyze", s.AnalyzeWebsite)
 		r.Get("/websites", s.WebsitesList)
 		r.Get("/websites/{id}", s.WebsiteByID)
+		r.Post("/tools/verify-email", s.ToolVerifyEmail)
+		r.Get("/tools/domain-age", s.ToolDomainAge)
+		r.Post("/tools/linkedin-format", s.ToolLinkedInFormat)
+		r.Post("/tools/bulk", s.ToolBulkStart)
+		r.Get("/tools/bulk/{id}", s.ToolBulkStatus)
 	})
 	staticDir := "frontend/dist"
 	for _, p := range []string{"frontend/dist", "./frontend/dist", "static", "./static", "/app/static"} {

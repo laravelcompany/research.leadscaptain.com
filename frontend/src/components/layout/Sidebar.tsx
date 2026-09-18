@@ -4,6 +4,7 @@ const items=[
  {id:'companies', label:'Companies', icon:'▣'},
  {id:'websites', label:'Websites', icon:'◉'},
  {id:'objectives', label:'Objectives', icon:'◎'},
+ {id:'tools', label:'Tools', icon:'⬡'},
  {id:'runs', label:'Runs', icon:'⟡'},
  {id:'interrogation', label:'Interrogation', icon:'⬢'},
  {id:'live', label:'Live Events', icon:'●'},

@@ -22,6 +22,7 @@ import (
 	"research-leads/internal/events"
 	"research-leads/internal/leadscaptain"
 	"research-leads/internal/observability"
+	"research-leads/internal/researchtools"
 	"research-leads/internal/tools"
 )
 
@@ -62,7 +63,8 @@ func main() {
 	if authCfg.Enabled() {
 		logger.Info("ui auth enabled", "user", cfg.AuthUser)
 	}
-	handler := api.Router(database, bus, engine, cfg.CORSOrigins, cfg.AppAPIKey, ev, authCfg, compSvc)
+	toolsSvc := researchtools.NewService(database, cfg.APITimeout)
+	handler := api.Router(database, bus, engine, cfg.CORSOrigins, cfg.AppAPIKey, ev, authCfg, compSvc, toolsSvc)
 	srv := &http.Server{Addr: cfg.Host + ":" + cfg.Port, Handler: handler}
 	go func() {
 		logger.Info("listening", "addr", srv.Addr)

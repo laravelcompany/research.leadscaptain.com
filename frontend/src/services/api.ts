@@ -68,5 +68,12 @@ companies:{
    return apiFetch<{data:any[],total:number}>('/api/v1/websites'+(q?'?'+q:''))
   },
   get:(id:number)=>apiFetch<any>('/api/v1/websites/'+id),
+ },
+ tools:{
+  verifyEmail:(email:string)=>apiFetch<any>('/api/v1/tools/verify-email',{method:'POST',body:JSON.stringify({email})}),
+  domainAge:(domain:string)=>apiFetch<any>('/api/v1/tools/domain-age?domain='+encodeURIComponent(domain)),
+  linkedinFormat:(url:string)=>apiFetch<any>('/api/v1/tools/linkedin-format',{method:'POST',body:JSON.stringify({url})}),
+  bulkStart:(type:string,items:string[])=>apiFetch<{id:number,status:string}>('/api/v1/tools/bulk',{method:'POST',body:JSON.stringify({type,items})}),
+  bulkStatus:(id:number)=>apiFetch<any>('/api/v1/tools/bulk/'+id),
  }
 }
