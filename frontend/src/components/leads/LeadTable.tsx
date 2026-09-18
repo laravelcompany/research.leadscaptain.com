@@ -2,6 +2,28 @@ import { useState } from 'react'
 import { Badge } from '../ui/Badge'
 import { Drawer } from '../ui/Drawer'
 import { EmptyState } from '../ui/EmptyState'
+
+type SortKey='name'|'company'|'title'|'email'|'country'|'linkedin'|'score'
+type SortDirection='asc'|'desc'
+
+const priorityCountries=[
+ ['US','United States'],['GB','United Kingdom'],['CA','Canada'],['DE','Germany'],['FR','France'],
+ ['IT','Italy'],['ES','Spain'],['NL','Netherlands'],['CH','Switzerland'],['SE','Sweden'],
+ ['NO','Norway'],['DK','Denmark'],['BE','Belgium'],['AT','Austria'],['IE','Ireland'],
+ ['AU','Australia'],['NZ','New Zealand'],['JP','Japan'],['KR','South Korea'],['CN','China'],
+ ['IN','India'],['SG','Singapore'],['AE','United Arab Emirates'],['SA','Saudi Arabia'],['BR','Brazil'],
+ ['MX','Mexico'],['ZA','South Africa'],['IL','Israel'],['FI','Finland'],['PL','Poland'],
+ ['LU','Luxembourg'],['PT','Portugal'],['CZ','Czech Republic'],['EE','Estonia'],['RO','Romania'],
+] as const
+
+const sortValue=(lead:any,key:Exclude<SortKey,'score'>)=>{
+ if(key==='name') return lead.full_name||`${lead.first_name||''} ${lead.last_name||''}`.trim()
+ if(key==='company') return lead.company_name||''
+ if(key==='title') return lead.position_title||''
+ if(key==='email') return lead.email||''
+ if(key==='country') return lead.country_name||lead.country_code||lead.country||''
+ return lead.linkedin_url||''
+}
 function Score({v}:{v:number}){
  const pct=Math.max(0,Math.min(100,v))
  const variant=pct>=80?'success':pct>=50?'warning':'danger'
@@ -17,8 +39,8 @@ export function LeadTable({leads,loading,search,setSearch,onSearch}:{leads:any[]
  const [sel,setSel]=useState<any|null>(null)
  const [page,setPage]=useState(1)
  const [country,setCountry]=useState('')
- const [sortBy,setSortBy]=useState<'name'|'company'|'country'|'score'>('name')
- const [sortDir,setSortDir]=useState<'asc'|'desc'>('asc')
+ const [sortBy,setSortBy]=useState<SortKey>('name')
+ const [sortDir,setSortDir]=useState<SortDirection>('asc')
  const [scoreBand,setScoreBand]=useState('')
  const per=25
  let filtered=Array.isArray(leads)?leads:[]
@@ -28,14 +50,19 @@ export function LeadTable({leads,loading,search,setSearch,onSearch}:{leads:any[]
   return scoreBand==='high'?v>=80:scoreBand==='medium'?v>=50&&v<80:v<50
  })
  filtered=[...filtered].sort((a:any,b:any)=>{
-  let va='',vb=''
-  if(sortBy==='country'){va=a.country_code||'';vb=b.country_code||''}
-  else if(sortBy==='company'){va=a.company_name||'';vb=b.company_name||''}
-  else if(sortBy==='score'){return sortDir==='asc'?a.lead_score-b.lead_score:b.lead_score-a.lead_score}
-  else {va=(a.first_name+' '+a.last_name).toLowerCase();vb=(b.first_name+' '+b.last_name).toLowerCase()}
-  const c=va.localeCompare(vb); return sortDir==='asc'?c:-c
+  const comparison=sortBy==='score'
+   ? Number(a.lead_score||0)-Number(b.lead_score||0)
+   : sortValue(a,sortBy).localeCompare(sortValue(b,sortBy),undefined,{sensitivity:'base'})
+  return sortDir==='asc'?comparison:-comparison
  })
- const countries=[...new Set((Array.isArray(leads)?leads:[]).map((l:any)=>l.country_code).filter(Boolean))].sort() as string[]
+ const knownCountryCodes=new Set(priorityCountries.map(([code])=>code))
+ const extraCountries=[...new Set((Array.isArray(leads)?leads:[]).map((l:any)=>(l.country_code||l.country||'').toUpperCase()).filter((code:string)=>code&&!knownCountryCodes.has(code as any)))].sort() as string[]
+ const toggleSort=(key:SortKey)=>{
+  if(sortBy===key)setSortDir(direction=>direction==='asc'?'desc':'asc')
+  else {setSortBy(key);setSortDir('asc')}
+  setPage(1)
+ }
+ const SortHeader=({column,label,className=''}:{column:SortKey,label:string,className?:string})=><th aria-sort={sortBy===column?(sortDir==='asc'?'ascending':'descending'):'none'} className={`text-left p-0 font-semibold ${className}`}><button type="button" onClick={()=>toggleSort(column)} className="w-full p-3 text-left hover:bg-zinc-100 focus:outline-none focus:ring-2 focus:ring-inset focus:ring-zinc-500 whitespace-nowrap">{label} <span aria-hidden="true" className={sortBy===column?'text-zinc-900':'text-zinc-300'}>{sortBy===column?(sortDir==='asc'?'↑':'↓'):'↕'}</span></button></th>
  const total=filtered.length
  const pages=Math.max(1,Math.ceil(total/per))
  const curPage=Math.min(page,pages)
@@ -44,10 +71,8 @@ export function LeadTable({leads,loading,search,setSearch,onSearch}:{leads:any[]
   <div className="space-y-3">
     <div className="flex flex-wrap gap-2 items-center bg-zinc-50 border rounded-xl p-2">
      <input value={search} onChange={e=>{setSearch(e.target.value); setPage(1)}} onKeyDown={e=>e.key==='Enter'&&onSearch()} placeholder="Search name, email, company..." className="flex-1 min-w-[200px] border rounded-lg px-3 py-2 text-sm bg-white"/>
-     <select value={country} onChange={e=>{setCountry(e.target.value); setPage(1)}} className="border rounded-lg px-3 py-2 text-sm bg-white"><option value="">All countries</option>{countries.map(c=><option key={c} value={c}>{c}</option>)}</select>
+     <select aria-label="Filter by country" value={country} onChange={e=>{setCountry(e.target.value); setPage(1)}} className="border rounded-lg px-3 py-2 text-sm bg-white"><option value="">All countries</option>{priorityCountries.map(([code,name])=><option key={code} value={code}>{name} ({code})</option>)}{extraCountries.length>0&&<optgroup label="Other countries in results">{extraCountries.map(code=><option key={code} value={code}>{code}</option>)}</optgroup>}</select>
      <select value={scoreBand} onChange={e=>{setScoreBand(e.target.value); setPage(1)}} className="border rounded-lg px-3 py-2 text-sm bg-white"><option value="">All scores</option><option value="high">High (80+)</option><option value="medium">Medium (50-79)</option><option value="low">Low (&lt;50)</option></select>
-     <select value={sortBy} onChange={e=>{setSortBy(e.target.value as any); setPage(1)}} className="border rounded-lg px-3 py-2 text-sm bg-white"><option value="name">Sort: Name</option><option value="country">Sort: Country</option><option value="company">Sort: Company</option><option value="score">Sort: Score</option></select>
-     <button onClick={()=>{setSortDir(d=>d==='asc'?'desc':'asc'); setPage(1)}} className="border bg-white px-3 py-2 rounded-lg text-sm">{sortDir==='asc'?'↑':'↓'}</button>
      <button onClick={onSearch} className="bg-zinc-900 text-white px-4 py-2 rounded-lg text-sm">Search</button>
      <button onClick={async()=>{if(!confirm('Clear ALL leads from database?'))return; await import('../../services/api').then(m=>m.api.clearLeads()); setSearch(''); setCountry(''); setScoreBand(''); setPage(1); onSearch()}} className="border bg-white hover:bg-red-50 text-red-600 px-3 py-2 rounded-lg text-sm">Clear DB</button>
      <button onClick={()=>{setSearch(''); setCountry(''); setScoreBand(''); setPage(1); onSearch()}} className="border bg-white px-3 py-2 rounded-lg text-sm">Clear filter</button>
@@ -56,7 +81,7 @@ export function LeadTable({leads,loading,search,setSearch,onSearch}:{leads:any[]
    <div className="bg-white border rounded-xl overflow-hidden">
     <div className="overflow-auto max-h-[60vh]">
      <table className="w-full text-sm">
-        <thead className="sticky top-0 bg-zinc-50 border-b"><tr><th className="text-left p-3 font-semibold">Name</th><th className="text-left p-3 font-semibold hidden md:table-cell">Company</th><th className="text-left p-3 font-semibold">Title</th><th className="text-left p-3 font-semibold hidden sm:table-cell">Email</th><th className="text-left p-3 font-semibold hidden lg:table-cell">Country</th><th className="text-left p-3 font-semibold hidden lg:table-cell">LinkedIn</th><th className="text-left p-3 font-semibold">Score</th></tr></thead>
+        <thead className="sticky top-0 bg-zinc-50 border-b"><tr><SortHeader column="name" label="Name"/><SortHeader column="company" label="Company" className="hidden md:table-cell"/><SortHeader column="title" label="Title"/><SortHeader column="email" label="Email" className="hidden sm:table-cell"/><SortHeader column="country" label="Country" className="hidden lg:table-cell"/><SortHeader column="linkedin" label="LinkedIn" className="hidden lg:table-cell"/><SortHeader column="score" label="Score"/></tr></thead>
        <tbody>
         {loading ? <tr><td colSpan={7} className="p-8 text-center text-zinc-400">Loading...</td></tr> :
          slice.map((l:any)=><tr key={l.id} onClick={()=>setSel(l)} className="border-t hover:bg-zinc-50 cursor-pointer">
