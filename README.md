@@ -151,3 +151,24 @@ go test ./...
 ## Docs
 - docs/architecture.md
 - docs/patents/lead-research-patent-landscape.md
+
+## Tools suite
+
+Utility tools for manual research and validation, all free to run:
+
+- **Email verification** - syntax check, MX record lookup, provider
+  identification (Gmail, Outlook/Microsoft 365, Yahoo, Proton and corporate
+  gateways), disposable-domain and role-address flags -> Valid / Invalid /
+  Risky / Unknown. No external verification API needed. (`EMAIL_VALIDATION_URL`
+  still overrides for the lead pipeline.)
+- **Domain age checker** - creation date, expiry and registrar from RDAP
+  (rdap.org bootstrap, free and keyless, the registry-run successor to WHOIS).
+- **LinkedIn URL formatter** - normalizes any LinkedIn profile/company link
+  (tracking parameters, regional hosts, bare handles) to the canonical
+  `https://www.linkedin.com/in/<slug>` form.
+- **Bulk processing** - paste up to 25 emails or URLs; queued and processed in
+  the background with live progress (`tool_jobs` table).
+
+Endpoints: `POST /api/v1/tools/verify-email`, `GET /api/v1/tools/domain-age`,
+`POST /api/v1/tools/linkedin-format`, `POST /api/v1/tools/bulk`,
+`GET /api/v1/tools/bulk/{id}`.

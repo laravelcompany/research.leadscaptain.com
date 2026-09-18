@@ -15,6 +15,7 @@ import (
 	"research-leads/internal/agent"
 	"research-leads/internal/events"
 	"research-leads/internal/leads"
+	"research-leads/internal/researchtools"
 )
 
 type Server struct {
@@ -26,6 +27,8 @@ type Server struct {
 	VerifyEmail func(ctx context.Context, email string) (string, error)
 	// Auth carries the UI login configuration (env-supplied credentials).
 	Auth *AuthConfig
+	// Tools powers the Tools page (email verify, domain age, bulk jobs).
+	Tools *researchtools.Service
 }
 
 func (s *Server) Objectives(w http.ResponseWriter, r *http.Request) {

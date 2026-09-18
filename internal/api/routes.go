@@ -17,9 +17,10 @@ import (
 	"research-leads/internal/api/middleware"
 	"research-leads/internal/emailvalidator"
 	"research-leads/internal/events"
+	"research-leads/internal/researchtools"
 )
 
-func Router(db *sql.DB, bus *events.Bus, engine *agent.Engine, corsOrigins, apiKey string, verifier *emailvalidator.Client, auth *handlers.AuthConfig) http.Handler {
+func Router(db *sql.DB, bus *events.Bus, engine *agent.Engine, corsOrigins, apiKey string, verifier *emailvalidator.Client, auth *handlers.AuthConfig, toolsSvc *researchtools.Service) http.Handler {
 	r := chi.NewRouter()
 	r.Use(func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
@@ -49,7 +50,7 @@ func Router(db *sql.DB, bus *events.Bus, engine *agent.Engine, corsOrigins, apiK
 			next.ServeHTTP(w, req)
 		})
 	})
-	s := &handlers.Server{DB: db, Bus: bus, Engine: engine, Auth: auth}
+	s := &handlers.Server{DB: db, Bus: bus, Engine: engine, Auth: auth, Tools: toolsSvc}
 	if verifier != nil {
 		s.VerifyEmail = func(ctx context.Context, email string) (string, error) {
 			res, err := verifier.Verify(ctx, email)
@@ -106,6 +107,11 @@ func Router(db *sql.DB, bus *events.Bus, engine *agent.Engine, corsOrigins, apiK
 		r.Post("/analytics/gap", s.GapAnalysis)
 		r.Get("/leads/stale", s.StaleLeads)
 		r.Get("/leads/{id}/similar", s.SimilarLeads)
+		r.Post("/tools/verify-email", s.ToolVerifyEmail)
+		r.Get("/tools/domain-age", s.ToolDomainAge)
+		r.Post("/tools/linkedin-format", s.ToolLinkedInFormat)
+		r.Post("/tools/bulk", s.ToolBulkStart)
+		r.Get("/tools/bulk/{id}", s.ToolBulkStatus)
 	})
 	staticDir := "frontend/dist"
 	for _, p := range []string{"frontend/dist", "./frontend/dist", "static", "./static", "/app/static"} {
