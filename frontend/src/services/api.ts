@@ -46,7 +46,7 @@ export const api={
   const q=new URLSearchParams(params).toString()
   return '/api/v1/leads/export'+(q?'?'+q:'')
  },
- companies:{
+companies:{
   search:(params:Record<string,string>)=>{
    const clean:Record<string,string>={}; for(const [k,v] of Object.entries(params)) if(v) clean[k]=v
    const q=new URLSearchParams(clean).toString()
@@ -59,5 +59,14 @@ export const api={
   },
   saveToLead:(body:{company_id?:number,name?:string,domain?:string})=>apiFetch<{lead_id:number,created:boolean}>('/api/v1/companies/save-to-lead',{method:'POST',body:JSON.stringify(body)}),
   exportUrl:()=>'/api/v1/companies/export',
+ },
+ websites:{
+  analyze:(url:string)=>apiFetch<any>('/api/v1/websites/analyze',{method:'POST',body:JSON.stringify({url})}),
+  list:(params:Record<string,string>={})=>{
+   const clean:Record<string,string>={}; for(const [k,v] of Object.entries(params)) if(v) clean[k]=v
+   const q=new URLSearchParams(clean).toString()
+   return apiFetch<{data:any[],total:number}>('/api/v1/websites'+(q?'?'+q:''))
+  },
+  get:(id:number)=>apiFetch<any>('/api/v1/websites/'+id),
  }
 }

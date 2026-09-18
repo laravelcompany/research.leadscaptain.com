@@ -2,6 +2,7 @@ const items=[
  {id:'dashboard', label:'Dashboard', icon:'▦'},
  {id:'leads', label:'Leads', icon:'◈'},
  {id:'companies', label:'Companies', icon:'▣'},
+ {id:'websites', label:'Websites', icon:'◉'},
  {id:'objectives', label:'Objectives', icon:'◎'},
  {id:'runs', label:'Runs', icon:'⟡'},
  {id:'interrogation', label:'Interrogation', icon:'⬢'},

@@ -16,6 +16,7 @@ import { ToastContainer, toast } from './components/ui/Toast'
 import { ErrorBoundary } from './components/ui/ErrorBoundary'
 import { ObjectiveLeadsPage } from './components/objectives/ObjectiveLeadsPage'
 import { CompaniesPage } from './components/companies/CompaniesPage'
+import { WebsitesPage } from './components/websites/WebsitesPage'
 import { BrowserRouter, useLocation, useNavigate } from 'react-router-dom'
 
 function Application(){
@@ -23,7 +24,7 @@ function Application(){
  const [authState,setAuthState]=useState<'loading'|'login'|'ready'>('loading')
  const [authUser,setAuthUser]=useState('')
  const initialPath=location.pathname
- const [tab,setTabState]=useState(initialPath==='/objectives'?'objectives':initialPath==='/leads'?'leads':initialPath==='/runs'?'runs':initialPath==='/interrogation'?'interrogation':initialPath==='/events'?'live':initialPath==='/companies'?'companies':'dashboard')
+ const [tab,setTabState]=useState(initialPath==='/objectives'?'objectives':initialPath==='/leads'?'leads':initialPath==='/runs'?'runs':initialPath==='/interrogation'?'interrogation':initialPath==='/events'?'live':initialPath==='/companies'?'companies':initialPath==='/websites'?'websites':'dashboard')
  const setTab=(next:string)=>{setTabState(next);navigate(next==='dashboard'?'/':next==='live'?'/events':'/'+next)}
  const [stats,setStats]=useState<any>(null)
  const [statsLoading,setStatsLoading]=useState(true)
@@ -90,6 +91,7 @@ function Application(){
      )}
      {tab==='leads' && <LeadTable leads={leads} loading={leadsLoading} search={search} setSearch={setSearch} onSearch={refreshLeads} />}
      {tab==='companies' && <CompaniesPage />}
+     {tab==='websites' && <WebsitesPage />}
      {tab==='objectives' && (
       <div className="space-y-3">
        <div className="flex justify-between items-center"><h2 className="font-bold text-lg">Objectives</h2><button onClick={()=>setModalOpen(true)} className="bg-zinc-900 text-white px-4 py-2 rounded-xl text-sm">+ New Objective</button></div>

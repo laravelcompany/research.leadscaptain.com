@@ -16,6 +16,7 @@ import (
 	"research-leads/internal/companies"
 	"research-leads/internal/events"
 	"research-leads/internal/leads"
+	"research-leads/internal/webcheck"
 )
 
 type Server struct {
@@ -29,6 +30,9 @@ type Server struct {
 	Auth *AuthConfig
 	// Companies powers the Companies section; nil when not wired (tests).
 	Companies *companies.Service
+	// AnalyzeSite analyzes one URL for the Websites section; nil means the
+	// real webcheck.Analyze. A field so tests can stub the network.
+	AnalyzeSite func(ctx context.Context, rawURL string) webcheck.Analysis
 }
 
 func (s *Server) Objectives(w http.ResponseWriter, r *http.Request) {

@@ -175,3 +175,17 @@ Data sources (all free by default, nothing is spent):
 Endpoints: `GET /api/v1/companies/search`, `GET /api/v1/companies/suggest`,
 `GET /api/v1/companies/profile`, `GET /api/v1/companies` (cache),
 `GET /api/v1/companies/export`, `POST /api/v1/companies/save-to-lead`.
+## Websites section
+
+Analyze any URL for technical and SEO health: meta title/description, H1 tags,
+page-load time, contact scraping (emails, phones and social links from the
+homepage and contact pages), keyword density and a 0-100 health score with a
+per-check breakdown. Reports are stored (`website_analyses` table) so past
+analyses stay browsable.
+
+Everything is fetched from the site itself - no paid API. Traffic estimates
+(monthly visitors, sources) have no free data source; the report says so
+honestly instead of inventing numbers.
+
+Endpoints: `POST /api/v1/websites/analyze`, `GET /api/v1/websites`,
+`GET /api/v1/websites/{id}`.
