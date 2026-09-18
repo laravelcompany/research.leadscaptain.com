@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"research-leads/internal/researchtools"
 )
@@ -69,9 +70,25 @@ func TestToolBulkHandlers(t *testing.T) {
 	if started["id"].(float64) == 0 {
 		t.Fatalf("no job id: %+v", started)
 	}
-	rec2 := httptest.NewRecorder()
-	s.ToolBulkStatus(rec2, withID(httptest.NewRequest("GET", "/api/v1/tools/bulk/1", nil), "1"))
-	if rec2.Code != 200 {
-		t.Fatalf("status code %d", rec2.Code)
+	// The job runs in a background goroutine; wait for it to finish so the
+	// test DB is quiet before t.TempDir cleanup removes it.
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		rec2 := httptest.NewRecorder()
+		s.ToolBulkStatus(rec2, withID(httptest.NewRequest("GET", "/api/v1/tools/bulk/1", nil), "1"))
+		if rec2.Code != 200 {
+			t.Fatalf("status code %d", rec2.Code)
+		}
+		var job struct {
+			Status string `json:"status"`
+		}
+		json.NewDecoder(rec2.Body).Decode(&job)
+		if job.Status == "completed" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("job did not complete: %s", job.Status)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
