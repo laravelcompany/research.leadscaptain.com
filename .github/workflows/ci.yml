@@ -21,6 +21,9 @@ jobs:
       - name: Run tests
         run: go test ./... -count=1
 
+      - name: Build container
+        run: docker build -t research-leadscaptain:${{ github.sha }} .
+
   frontend:
     runs-on: ubuntu-latest
     defaults:

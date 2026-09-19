@@ -24,6 +24,7 @@ function Application(){
  const location=useLocation(); const navigate=useNavigate()
  const [authState,setAuthState]=useState<'loading'|'login'|'ready'>('loading')
  const [authUser,setAuthUser]=useState('')
+ const [authError,setAuthError]=useState('')
  const initialPath=location.pathname
  const [tab,setTabState]=useState(initialPath==='/objectives'?'objectives':initialPath==='/leads'?'leads':initialPath==='/runs'?'runs':initialPath==='/interrogation'?'interrogation':initialPath==='/events'?'live':initialPath==='/companies'?'companies':initialPath==='/websites'?'websites':initialPath==='/tools'?'tools':'dashboard')
  const setTab=(next:string)=>{setTabState(next);navigate(next==='dashboard'?'/':next==='live'?'/events':'/'+next)}
@@ -48,8 +49,8 @@ function Application(){
  useEffect(()=>{
   setOnUnauthorized(()=>setAuthState('login'))
   api.auth.me()
-   .then(r=>{ if(r.auth_required && !r.authenticated){ setAuthState('login') } else { setAuthUser(r.username||''); setAuthState('ready') } })
-   .catch(()=>setAuthState('login'))
+   .then(r=>{ if(!r.authenticated){ setAuthError(r.configuration_error||''); setAuthState('login') } else { setAuthUser(r.user?.name||r.user?.email||'LinkedIn user'); setAuthState('ready') } })
+   .catch((e:any)=>{ setAuthError(e?.message||''); setAuthState('login') })
  },[])
 
  useEffect(()=>{ if(authState==='ready') refreshAll()},[authState])
@@ -64,7 +65,7 @@ function Application(){
  })
 
   if(authState==='loading') return <div className="min-h-screen bg-zinc-50 flex items-center justify-center text-sm text-zinc-400">Loading...</div>
-  if(authState==='login') return <><LoginScreen onLogin={(u)=>{ setAuthUser(u); setAuthState('ready') }} /><ToastContainer /></>
+  if(authState==='login') return <><LoginScreen error={authError} /><ToastContainer /></>
 
  const objectiveMatch=location.pathname.match(/^\/objectives\/([^/]+)\/leads\/?$/)
  return (

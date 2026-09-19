@@ -16,8 +16,8 @@ import (
 	"research-leads/internal/companies"
 	"research-leads/internal/events"
 	"research-leads/internal/leads"
-	"research-leads/internal/webcheck"
 	"research-leads/internal/researchtools"
+	"research-leads/internal/webcheck"
 )
 
 type Server struct {
@@ -27,7 +27,7 @@ type Server struct {
 	// VerifyEmail verifies one address and returns its status (e.g. "valid",
 	// "invalid", "unknown"). May be nil when no validator is configured.
 	VerifyEmail func(ctx context.Context, email string) (string, error)
-	// Auth carries the UI login configuration (env-supplied credentials).
+	// Auth carries the LinkedIn OIDC and local session configuration.
 	Auth *AuthConfig
 	// Companies powers the Companies section; nil when not wired (tests).
 	Companies *companies.Service

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -66,9 +67,11 @@ func main() {
 	reg.Register(tools.NewFindEmail(ev))
 	engine := agent.New(database, aiClient, reg, bus, logger, cfg.MaxIterations)
 	engine.Recover(context.Background())
-	authCfg := &handlers.AuthConfig{User: cfg.AuthUser, Pass: cfg.AuthPass, Secret: middleware.SessionSecret(cfg.AuthUser, cfg.AuthPass, cfg.SessionSecret)}
-	if authCfg.Enabled() {
-		logger.Info("ui auth enabled", "user", cfg.AuthUser)
+	authCfg := &handlers.AuthConfig{ClientID: cfg.LinkedInClientID, ClientSecret: cfg.LinkedInClientSecret, RedirectURL: cfg.LinkedInRedirectURL, IssuerURL: cfg.LinkedInIssuerURL, Scopes: strings.Fields(cfg.LinkedInScopes), Secret: middleware.SessionSecret(cfg.SessionSecret)}
+	if err := authCfg.ValidationError(); err != nil {
+		logger.Warn("LinkedIn authentication configuration incomplete", "error", err)
+	} else {
+		logger.Info("LinkedIn authentication enabled")
 	}
 	toolsSvc := researchtools.NewService(database, cfg.APITimeout)
 	// The Tools page verifies through the same shared verifier (SMTP probe

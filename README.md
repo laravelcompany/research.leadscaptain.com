@@ -44,32 +44,62 @@ already run (so the agent does not repeat itself). Without an AI endpoint the
 fallback heuristic derives the search query, country and city from the
 objective text instead of hardcoded defaults.
 
-## UI auth (login screen)
-Set `AUTH_USERNAME` and `AUTH_PASSWORD` in `.env` and the web UI shows a login
-screen before any data loads. Login issues a signed HttpOnly session cookie
-(7-day expiry); the header gains a Sign out button. With either variable
-empty the login screen is disabled and the app behaves as before.
+## LinkedIn authentication
 
-- `POST /api/v1/auth/login` `{"username":"...","password":"..."}` - logs in,
-  sets the session cookie. Also returns the cookie for browser use.
-- `GET /api/v1/auth/me` - `{"auth_required":bool,"authenticated":bool}`.
-- `POST /api/v1/auth/logout` - clears the cookie.
-- API clients keep using `Authorization: Bearer $APP_API_KEY` untouched; a
-  valid UI session cookie also satisfies the `APP_API_KEY` gate so the UI
-  works when both are configured. The gate applies to `/api/*` routes only:
-  the SPA, its static assets and the index.html fallback stay public so the
-  login screen can load. Health and metrics endpoints stay open.
-- `AUTH_SESSION_SECRET` optionally overrides the cookie-signing key (default
-  is derived from the credentials, so sessions survive restarts but are
-  invalidated when credentials change).
+The browser UI has one authentication path: **Sign in with LinkedIn using OpenID Connect**. The old `AUTH_USERNAME` / `AUTH_PASSWORD` login has been removed. `APP_API_KEY` remains separate machine-to-machine authentication for scripts and integrations; a LinkedIn browser session also authorizes UI API calls. Health and metrics endpoints and the SPA shell remain public.
+
+Request the **Sign in with LinkedIn using OpenID Connect** product in LinkedIn's Developer Portal and register this exact production callback:
+
+```text
+https://research.leadscaptain.com/api/v1/auth/callback
+```
+
+Set these values at deploy time (never commit real credentials):
+
+```env
+LINKEDIN_CLIENT_ID=your-linkedin-app-client-id
+LINKEDIN_CLIENT_SECRET=your-linkedin-app-client-secret
+LINKEDIN_REDIRECT_URL=https://research.leadscaptain.com/api/v1/auth/callback
+LINKEDIN_ISSUER_URL=https://www.linkedin.com/oauth
+LINKEDIN_SCOPES=openid profile email
+AUTH_SESSION_SECRET=replace-with-output-of-openssl-rand-base64-48
+```
+
+The server reports a clear configuration error until all required variables are present. `LINKEDIN_REDIRECT_URL` must exactly match the redirect URL registered in LinkedIn. The login uses authorization code flow, OIDC discovery and ID-token verification, state, nonce and PKCE. A successful callback upserts the local user by LinkedIn's stable `sub`, stores the granted access/refresh tokens and expiry for permitted official API calls, then creates a signed seven-day HttpOnly/SameSite session. Logout clears the local session. Cancelled consent, invalid/expired state, missing codes and invalid ID tokens fail without creating a user or session.
+
+Endpoints:
+
+- `GET /api/v1/auth/login` - starts the LinkedIn redirect.
+- `GET /api/v1/auth/callback` - validates LinkedIn's response, upserts the user and redirects to `/`. This URL is called by LinkedIn, not by hand.
+- `GET /api/v1/auth/me` - returns the current local user's `name`, optional `email` and optional `picture`.
+- `POST /api/v1/auth/logout` - clears the local session.
 
 ```bash
-curl -c cookies.txt -X POST localhost:7001/api/v1/auth/login \
-  -H 'Content-Type: application/json' \
-  -d '{"username":"admin","password":"S3curePass!"}'
-curl -b cookies.txt localhost:7001/api/v1/stats
-curl -b cookies.txt -X POST localhost:7001/api/v1/auth/logout
+# Browser entry point (returns a LinkedIn redirect)
+curl -I https://research.leadscaptain.com/api/v1/auth/login
+
+# After browser authentication, inspect/clear the local session cookie
+curl -b cookies.txt https://research.leadscaptain.com/api/v1/auth/me
+curl -b cookies.txt -X POST https://research.leadscaptain.com/api/v1/auth/logout
+
+# Non-browser API clients still use APP_API_KEY
+curl -H "Authorization: Bearer $APP_API_KEY" \
+  https://research.leadscaptain.com/api/v1/stats
 ```
+
+### Current LinkedIn API limits
+
+Authentication needs the self-service **Sign in with LinkedIn using OpenID Connect** product and the `openid profile email` scopes. `email` and `email_verified` are optional claims even when requested, so the application maps users by `sub`, not email. LinkedIn says this sign-in product authenticates an account but does not verify a person's real-world identity.
+
+The sign-in scopes do **not** grant a general people search. LinkedIn's Connections API is restricted to developers approved by LinkedIn and only returns the consenting member's first-degree connections. It cannot browse another member's connections and does not expose second-degree connections. The Profile API is also restricted for access beyond the authenticated member; looking up another member requires a LinkedIn Person ID obtained through an approved limited-access API and remains subject to privacy settings. Sales-oriented profile matching requires approval for the Sales Navigator Application Platform and its `r_sales_nav_profiles` permission. Do not add scraping as a fallback. Request the relevant product/partner approval in the Developer Portal, then add only the scopes LinkedIn actually grants to `LINKEDIN_SCOPES`; users must re-authenticate after scope changes. Programmatic refresh tokens are available only to a limited set of approved partners.
+
+Official references:
+
+- https://learn.microsoft.com/en-us/linkedin/consumer/integrations/self-serve/sign-in-with-linkedin-v2
+- https://learn.microsoft.com/en-us/linkedin/shared/authentication/authorization-code-flow
+- https://learn.microsoft.com/en-us/linkedin/shared/authentication/getting-access
+- https://learn.microsoft.com/en-us/linkedin/shared/integrations/people/connections-api
+- https://learn.microsoft.com/en-us/linkedin/shared/integrations/people/profile-api
 
 ## Quick start
 ```bash
