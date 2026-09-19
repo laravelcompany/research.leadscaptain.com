@@ -189,7 +189,7 @@ func (s *Server) Callback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var claims struct{ Sub, Name, Email, Picture, Nonce string }
-	if err = idToken.Claims(&claims); err != nil || claims.Sub == "" || claims.Nonce != flow[1] {
+	if err = idToken.Claims(&claims); err != nil || !validLinkedInIdentity(claims.Sub, claims.Nonce, flow[1]) {
 		slog.Warn("linkedin oauth identity validation failed", "claims_decoded", err == nil, "subject_present", claims.Sub != "", "nonce_valid", claims.Nonce == flow[1])
 		writeError(w, http.StatusBadRequest, "LinkedIn identity response is invalid")
 		return
@@ -223,6 +223,14 @@ func (s *Server) Callback(w http.ResponseWriter, r *http.Request) {
 	slog.Info("linkedin oauth authentication succeeded", "user_id", id)
 	http.Redirect(w, r, "/", http.StatusFound)
 }
+
+// LinkedIn may omit the nonce claim from otherwise valid ID tokens. State still
+// binds the callback to the signed, short-lived flow cookie. If LinkedIn does
+// return a nonce, reject it unless it matches the one sent at authorization.
+func validLinkedInIdentity(subject, returnedNonce, expectedNonce string) bool {
+	return subject != "" && (returnedNonce == "" || returnedNonce == expectedNonce)
+}
+
 func upsertLinkedInUser(ctx context.Context, db *sql.DB, c struct{ Sub, Name, Email, Picture, Nonce string }, tok *oauth2.Token) (int64, error) {
 	_, err := db.ExecContext(ctx, `INSERT INTO users(linkedin_sub,email,name,picture_url,access_token,refresh_token,token_expires_at,last_login_at) VALUES(?,?,?,?,?,?,?,CURRENT_TIMESTAMP) ON CONFLICT(linkedin_sub) DO UPDATE SET email=excluded.email,name=excluded.name,picture_url=excluded.picture_url,access_token=excluded.access_token,refresh_token=excluded.refresh_token,token_expires_at=excluded.token_expires_at,updated_at=CURRENT_TIMESTAMP,last_login_at=CURRENT_TIMESTAMP`, c.Sub, c.Email, c.Name, c.Picture, tok.AccessToken, tok.RefreshToken, tok.Expiry)
 	if err != nil {
