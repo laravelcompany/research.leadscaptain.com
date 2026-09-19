@@ -81,9 +81,9 @@ func TestMeReturnsSignedOutStateWithoutTurningJSONIntoAnError(t *testing.T) {
 	}
 }
 
-func TestLinkedInTokenExchangeUsesOneFormRequestAndConfiguredRedirect(t *testing.T) {
+func TestLinkedInConfidentialClientTokenExchangeUsesOneFormRequestAndConfiguredRedirect(t *testing.T) {
 	requests := 0
-	var gotRedirect, gotClientID, gotClientSecret, gotCode string
+	var gotRedirect, gotClientID, gotClientSecret, gotCode, gotVerifier string
 	tokenServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests++
 		if err := r.ParseForm(); err != nil {
@@ -93,6 +93,7 @@ func TestLinkedInTokenExchangeUsesOneFormRequestAndConfiguredRedirect(t *testing
 		gotClientID = r.Form.Get("client_id")
 		gotClientSecret = r.Form.Get("client_secret")
 		gotCode = r.Form.Get("code")
+		gotVerifier = r.Form.Get("code_verifier")
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(`{"access_token":"token","token_type":"Bearer","expires_in":3600}`))
 	}))
@@ -103,13 +104,13 @@ func TestLinkedInTokenExchangeUsesOneFormRequestAndConfiguredRedirect(t *testing
 	if !strings.Contains(cfg.AuthCodeURL("state"), "redirect_uri="+url.QueryEscape(auth.RedirectURL)) {
 		t.Fatalf("authorization request does not use configured redirect URI")
 	}
-	if _, err := cfg.Exchange(t.Context(), "single-use-code", oauth2.VerifierOption("verifier")); err != nil {
+	if _, err := cfg.Exchange(t.Context(), "single-use-code"); err != nil {
 		t.Fatal(err)
 	}
 	if requests != 1 {
 		t.Fatalf("token endpoint received %d requests; authorization codes are single-use", requests)
 	}
-	if gotRedirect != auth.RedirectURL || gotClientID != auth.ClientID || gotClientSecret != auth.ClientSecret || gotCode != "single-use-code" {
-		t.Fatalf("unexpected token form: redirect=%q client=%q secret=%q code=%q", gotRedirect, gotClientID, gotClientSecret, gotCode)
+	if gotRedirect != auth.RedirectURL || gotClientID != auth.ClientID || gotClientSecret != auth.ClientSecret || gotCode != "single-use-code" || gotVerifier != "" {
+		t.Fatalf("unexpected confidential-client token form: redirect=%q client=%q secret=%q code=%q verifier=%q", gotRedirect, gotClientID, gotClientSecret, gotCode, gotVerifier)
 	}
 }
