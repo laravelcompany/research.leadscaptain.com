@@ -47,7 +47,7 @@ func Router(db *sql.DB, bus *events.Bus, engine *agent.Engine, corsOrigins, apiK
 	r.Use(middleware.Session(auth.Secret, apiKey))
 	r.Use(func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-			fmt.Printf("{\"time\":\"%s\",\"level\":\"DEBUG\",\"msg\":\"request\",\"method\":\"%s\",\"path\":\"%s\",\"query\":\"%s\"}\n", time.Now().Format(time.RFC3339), req.Method, req.URL.Path, req.URL.RawQuery)
+			fmt.Printf("{\"time\":\"%s\",\"level\":\"DEBUG\",\"msg\":\"request\",\"method\":\"%s\",\"path\":\"%s\"}\n", time.Now().Format(time.RFC3339), req.Method, req.URL.Path)
 			next.ServeHTTP(w, req)
 		})
 	})
