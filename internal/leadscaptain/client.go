@@ -68,13 +68,13 @@ func (c *Client) Search(ctx context.Context, p SearchParams) ([]Lead, error) {
 	if p.Industry != "" {
 		q.Set("industry_name", p.Industry)
 	}
-	q.Set("limit", fmt.Sprint(p.PerPage))
+	q.Set("per_page", fmt.Sprint(p.PerPage))
 	if p.Page != 0 {
 		q.Set("page", fmt.Sprint(p.Page))
 	}
 	u.RawQuery = q.Encode()
 	req, _ := http.NewRequestWithContext(ctx, "GET", u.String(), nil)
-	req.Header.Set("X-API-Token", c.token)
+	req.Header.Set("X-API-Key", c.token)
 	req.Header.Set("Authorization", "Bearer "+c.token)
 	resp, err := c.http.Do(req)
 	if err != nil {
@@ -82,7 +82,12 @@ func (c *Client) Search(ctx context.Context, p SearchParams) ([]Lead, error) {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
-		return nil, fmt.Errorf("leadscaptain %d", resp.StatusCode)
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		detail := strings.TrimSpace(string(body))
+		if detail == "" {
+			return nil, fmt.Errorf("leadscaptain %d", resp.StatusCode)
+		}
+		return nil, fmt.Errorf("leadscaptain %d: %s", resp.StatusCode, detail)
 	}
 	var raw struct {
 		Data []struct {
@@ -131,7 +136,7 @@ func (c *Client) Search(ctx context.Context, p SearchParams) ([]Lead, error) {
 			q.Set("page", fmt.Sprint(page))
 			u.RawQuery = q.Encode()
 			req2, _ := http.NewRequestWithContext(ctx, "GET", u.String(), nil)
-			req2.Header.Set("X-API-Token", c.token)
+			req2.Header.Set("X-API-Key", c.token)
 			req2.Header.Set("Authorization", "Bearer "+c.token)
 			resp2, err := c.http.Do(req2)
 			if err != nil {
