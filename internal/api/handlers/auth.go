@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -56,6 +57,11 @@ func (a *AuthConfig) ValidationError() error {
 	return nil
 }
 func (a *AuthConfig) oauthConfig(endpoint oauth2.Endpoint) *oauth2.Config {
+	// LinkedIn requires client_id and client_secret in the token request body.
+	// Setting this explicitly also prevents oauth2's auto-detection from making a
+	// speculative first request with HTTP Basic auth. Authorization codes are
+	// single-use, so the callback must make exactly one exchange request.
+	endpoint.AuthStyle = oauth2.AuthStyleInParams
 	return &oauth2.Config{ClientID: a.ClientID, ClientSecret: a.ClientSecret, RedirectURL: a.RedirectURL, Scopes: a.Scopes, Endpoint: endpoint}
 }
 func randomURLSafe(n int) (string, error) {
@@ -95,6 +101,7 @@ func (s *Server) Login(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, err.Error())
 		return
 	}
+	slog.Info("linkedin oauth login started", "redirect_uri", s.Auth.RedirectURL)
 	provider, err := oidc.NewProvider(r.Context(), s.Auth.IssuerURL)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, "LinkedIn authentication is temporarily unavailable")
@@ -109,31 +116,37 @@ func (s *Server) Login(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, cfg.AuthCodeURL(state, oidc.Nonce(nonce), oauth2.S256ChallengeOption(verifier)), http.StatusFound)
 }
 func (s *Server) Callback(w http.ResponseWriter, r *http.Request) {
+	query := r.URL.Query()
 	if err := s.Auth.ValidationError(); err != nil {
 		writeError(w, http.StatusServiceUnavailable, err.Error())
 		return
 	}
+	slog.Info("linkedin oauth callback reached", "code_present", query.Get("code") != "", "state_present", query.Get("state") != "", "provider_error_present", query.Get("error") != "", "redirect_uri", s.Auth.RedirectURL)
 	c, err := r.Cookie(oauthFlowCookie)
 	if err != nil {
+		slog.Warn("linkedin oauth state validation failed", "reason", "cookie_missing")
 		writeError(w, http.StatusBadRequest, "OAuth login state is missing or expired")
 		return
 	}
 	defer clearFlow(w)
 	pieces := strings.Split(c.Value, ".")
 	if len(pieces) != 5 {
+		slog.Warn("linkedin oauth state validation failed", "reason", "cookie_invalid")
 		writeError(w, http.StatusBadRequest, "invalid OAuth login state")
 		return
 	}
 	flow, ok := verifyFlow(strings.Join(pieces[:4], "."), s.Auth.Secret)
-	if !ok || r.URL.Query().Get("state") != flow[0] {
+	if !ok || query.Get("state") != flow[0] {
+		slog.Warn("linkedin oauth state validation failed", "reason", "signature_or_state_mismatch")
 		writeError(w, http.StatusBadRequest, "invalid OAuth state")
 		return
 	}
-	if oauthErr := r.URL.Query().Get("error"); oauthErr != "" {
+	slog.Info("linkedin oauth state validated")
+	if oauthErr := query.Get("error"); oauthErr != "" {
 		writeError(w, http.StatusBadRequest, "LinkedIn sign-in was cancelled or denied")
 		return
 	}
-	code := r.URL.Query().Get("code")
+	code := query.Get("code")
 	if code == "" {
 		writeError(w, http.StatusBadRequest, "LinkedIn did not return an authorization code")
 		return
@@ -146,9 +159,22 @@ func (s *Server) Callback(w http.ResponseWriter, r *http.Request) {
 	cfg := s.Auth.oauthConfig(provider.Endpoint())
 	tok, err := cfg.Exchange(r.Context(), code, oauth2.VerifierOption(pieces[4]))
 	if err != nil {
+		status := 0
+		providerError := "token_exchange_failed"
+		var retrieveErr *oauth2.RetrieveError
+		if errors.As(err, &retrieveErr) {
+			if retrieveErr.Response != nil {
+				status = retrieveErr.Response.StatusCode
+			}
+			if retrieveErr.ErrorCode != "" {
+				providerError = retrieveErr.ErrorCode
+			}
+		}
+		slog.Warn("linkedin oauth token exchange failed", "token_endpoint", provider.Endpoint().TokenURL, "status", status, "provider_error", providerError)
 		writeError(w, http.StatusBadRequest, "LinkedIn authorization code could not be validated")
 		return
 	}
+	slog.Info("linkedin oauth token exchange succeeded", "token_endpoint", provider.Endpoint().TokenURL, "status", http.StatusOK)
 	rawID, ok := tok.Extra("id_token").(string)
 	if !ok {
 		writeError(w, http.StatusBadRequest, "LinkedIn response did not include an ID token")
@@ -161,15 +187,37 @@ func (s *Server) Callback(w http.ResponseWriter, r *http.Request) {
 	}
 	var claims struct{ Sub, Name, Email, Picture, Nonce string }
 	if err = idToken.Claims(&claims); err != nil || claims.Sub == "" || claims.Nonce != flow[1] {
+		slog.Warn("linkedin oauth identity validation failed", "claims_decoded", err == nil, "subject_present", claims.Sub != "", "nonce_valid", claims.Nonce == flow[1])
 		writeError(w, http.StatusBadRequest, "LinkedIn identity response is invalid")
 		return
 	}
+	// OIDC providers are not required to include all profile claims in the ID
+	// token. Resolve the application profile through LinkedIn's discovered
+	// UserInfo endpoint, while retaining the already-validated subject/nonce.
+	if userInfo, infoErr := provider.UserInfo(r.Context(), oauth2.StaticTokenSource(tok)); infoErr == nil {
+		var profile struct{ Sub, Name, Email, Picture string }
+		if claimErr := userInfo.Claims(&profile); claimErr == nil && (profile.Sub == "" || profile.Sub == claims.Sub) {
+			if profile.Name != "" {
+				claims.Name = profile.Name
+			}
+			if profile.Email != "" {
+				claims.Email = profile.Email
+			}
+			if profile.Picture != "" {
+				claims.Picture = profile.Picture
+			}
+		}
+	} else {
+		slog.Warn("linkedin oauth userinfo lookup failed", "userinfo_endpoint", provider.UserInfoEndpoint())
+	}
+	slog.Info("linkedin oauth user resolved", "subject_present", claims.Sub != "", "email_present", claims.Email != "")
 	id, err := upsertLinkedInUser(r.Context(), s.DB, claims, tok)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not save LinkedIn user")
 		return
 	}
 	http.SetCookie(w, &http.Cookie{Name: middleware.SessionCookie, Value: middleware.SignSessionToken(strconv.FormatInt(id, 10), s.Auth.Secret, time.Now()), Path: "/", MaxAge: int(middleware.SessionTTL.Seconds()), HttpOnly: true, Secure: secureRequest(r), SameSite: http.SameSiteLaxMode})
+	slog.Info("linkedin oauth authentication succeeded", "user_id", id)
 	http.Redirect(w, r, "/", http.StatusFound)
 }
 func upsertLinkedInUser(ctx context.Context, db *sql.DB, c struct{ Sub, Name, Email, Picture, Nonce string }, tok *oauth2.Token) (int64, error) {
@@ -190,14 +238,15 @@ func (s *Server) Me(w http.ResponseWriter, r *http.Request) {
 	}
 	uid, ok := middleware.SessionUser(r, s.Auth.Secret)
 	if !ok {
-		w.WriteHeader(http.StatusUnauthorized)
+		// This endpoint reports UI state; being signed out is an expected state,
+		// not an API failure. A 200 keeps the JSON in the data layer rather than
+		// turning the whole payload into a user-visible error string.
 		json.NewEncoder(w).Encode(map[string]any{"auth_required": true, "authenticated": false})
 		return
 	}
 	var name, email, picture string
 	err := s.DB.QueryRow("SELECT name,COALESCE(email,''),COALESCE(picture_url,'') FROM users WHERE id=?", uid).Scan(&name, &email, &picture)
 	if err != nil {
-		w.WriteHeader(http.StatusUnauthorized)
 		json.NewEncoder(w).Encode(map[string]any{"auth_required": true, "authenticated": false})
 		return
 	}

@@ -6,6 +6,7 @@ import (
 	_ "modernc.org/sqlite"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"research-leads/internal/api/middleware"
 	"strconv"
 	"strings"
@@ -71,11 +72,44 @@ func TestMeAndLogout(t *testing.T) {
 		t.Fatal("logout did not clear session")
 	}
 }
-func TestMeRejectsMissingSession(t *testing.T) {
+func TestMeReturnsSignedOutStateWithoutTurningJSONIntoAnError(t *testing.T) {
 	s := &Server{DB: testDB(t), Auth: testAuth()}
 	w := httptest.NewRecorder()
 	s.Me(w, httptest.NewRequest("GET", "/api/v1/auth/me", nil))
-	if w.Code != http.StatusUnauthorized {
-		t.Fatalf("got %d", w.Code)
+	if w.Code != http.StatusOK || w.Header().Get("Content-Type") != "application/json" || !strings.Contains(w.Body.String(), `"authenticated":false`) {
+		t.Fatalf("got %d %s %s", w.Code, w.Header().Get("Content-Type"), w.Body.String())
+	}
+}
+
+func TestLinkedInTokenExchangeUsesOneFormRequestAndConfiguredRedirect(t *testing.T) {
+	requests := 0
+	var gotRedirect, gotClientID, gotClientSecret, gotCode string
+	tokenServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		if err := r.ParseForm(); err != nil {
+			t.Fatal(err)
+		}
+		gotRedirect = r.Form.Get("redirect_uri")
+		gotClientID = r.Form.Get("client_id")
+		gotClientSecret = r.Form.Get("client_secret")
+		gotCode = r.Form.Get("code")
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"access_token":"token","token_type":"Bearer","expires_in":3600}`))
+	}))
+	defer tokenServer.Close()
+
+	auth := testAuth()
+	cfg := auth.oauthConfig(oauth2.Endpoint{AuthURL: "https://www.linkedin.com/oauth/v2/authorization", TokenURL: tokenServer.URL})
+	if !strings.Contains(cfg.AuthCodeURL("state"), "redirect_uri="+url.QueryEscape(auth.RedirectURL)) {
+		t.Fatalf("authorization request does not use configured redirect URI")
+	}
+	if _, err := cfg.Exchange(t.Context(), "single-use-code", oauth2.VerifierOption("verifier")); err != nil {
+		t.Fatal(err)
+	}
+	if requests != 1 {
+		t.Fatalf("token endpoint received %d requests; authorization codes are single-use", requests)
+	}
+	if gotRedirect != auth.RedirectURL || gotClientID != auth.ClientID || gotClientSecret != auth.ClientSecret || gotCode != "single-use-code" {
+		t.Fatalf("unexpected token form: redirect=%q client=%q secret=%q code=%q", gotRedirect, gotClientID, gotClientSecret, gotCode)
 	}
 }
