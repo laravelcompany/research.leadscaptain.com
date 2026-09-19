@@ -58,10 +58,10 @@ func TestAPIKeyAcceptsBearer(t *testing.T) {
 
 func TestAPIKeySessionCookieOnlyForAPI(t *testing.T) {
 	hit := false
-	secret := SessionSecret("admin", "pass", "")
+	secret := SessionSecret("secret")
 	h := APIKey("api-key-123", secret)(okHandler(&hit))
 	req := httptest.NewRequest("GET", "/api/v1/stats", nil)
-	req.AddCookie(&http.Cookie{Name: SessionCookie, Value: SignSessionToken("admin", secret, time.Now())})
+	req.AddCookie(&http.Cookie{Name: SessionCookie, Value: SignSessionToken("42", secret, time.Now())})
 	h.ServeHTTP(httptest.NewRecorder(), req)
 	if !hit {
 		t.Fatal("valid session cookie should satisfy the API gate")

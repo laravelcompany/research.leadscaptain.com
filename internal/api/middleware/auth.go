@@ -5,11 +5,11 @@ import (
 	"strings"
 )
 
-// APIKey gates API requests behind the APP_API_KEY Bearer token. A valid UI
+// APIKey gates API requests behind the APP_API_KEY Bearer token. A valid LinkedIn browser
 // session cookie (see Session) also satisfies the check so the React app
 // keeps working when both are configured. Static frontend files and the SPA
-// fallback stay public: the key gates API data, not the login screen, which
-// must load in a browser before any session or key exists.
+// fallback stay public: the key gates API data, not the LinkedIn connect screen, which
+// must load before any session or key exists.
 func APIKey(key string, sessionSecret []byte) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

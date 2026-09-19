@@ -21,8 +21,7 @@ async function apiFetch<T>(path:string, opts:RequestInit={}):Promise<T>{
 }
 export const api={
  auth:{
-  me:()=>apiFetch<{auth_required:boolean,authenticated:boolean,username?:string}>('/api/v1/auth/me'),
-  login:(username:string,password:string)=>apiFetch<{ok:boolean,username?:string}>('/api/v1/auth/login',{method:'POST',body:JSON.stringify({username,password})}),
+  me:()=>apiFetch<{auth_required:boolean,authenticated:boolean,user?:{name:string,email?:string,picture?:string},configuration_error?:string}>('/api/v1/auth/me'),
   logout:()=>apiFetch<{ok:boolean}>('/api/v1/auth/logout',{method:'POST'}),
  },
  stats:()=>apiFetch<any>('/api/v1/stats'),
