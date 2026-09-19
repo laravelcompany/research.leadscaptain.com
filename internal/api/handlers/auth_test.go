@@ -114,3 +114,25 @@ func TestLinkedInConfidentialClientTokenExchangeUsesOneFormRequestAndConfiguredR
 		t.Fatalf("unexpected confidential-client token form: redirect=%q client=%q secret=%q code=%q verifier=%q", gotRedirect, gotClientID, gotClientSecret, gotCode, gotVerifier)
 	}
 }
+
+func TestLinkedInCallbackIdentityNonceValidation(t *testing.T) {
+	tests := []struct {
+		name          string
+		returnedNonce string
+		want          bool
+	}{
+		{name: "absent nonce succeeds", returnedNonce: "", want: true},
+		{name: "matching nonce succeeds", returnedNonce: "expected-nonce", want: true},
+		{name: "wrong non-empty nonce fails", returnedNonce: "wrong-nonce", want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := validLinkedInIdentity("linkedin-subject", tt.returnedNonce, "expected-nonce"); got != tt.want {
+				t.Fatalf("validLinkedInIdentity() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+	if validLinkedInIdentity("", "", "expected-nonce") {
+		t.Fatal("missing subject must fail identity validation")
+	}
+}
