@@ -82,6 +82,7 @@ func (e *Engine) loop(runID, objectiveID int64, startIter int) {
 			e.bus.Publish(events.Event{Type: "agent.failed", Payload: map[string]any{"objective_id": objectiveID, "run_id": runID, "error": fmt.Sprint(r)}})
 		}
 	}()
+	consecutiveToolFailures := 0
 	for i := startIter; i < e.maxIter; i++ {
 		e.log.Debug("iteration start", "run_id", runID, "iter", i+1)
 		e.mu.Lock()
@@ -130,10 +131,16 @@ func (e *Engine) loop(runID, objectiveID int64, startIter int) {
 			res, err := e.registry.Execute(ctx, action.Action, action.Parameters)
 			if err != nil {
 				actErr = err.Error()
-				e.log.Error("tool failed", "action", action.Action, "err", actErr)
+				consecutiveToolFailures++
+				e.log.Error("tool failed", "action", action.Action, "err", actErr, "consecutive_failures", consecutiveToolFailures)
 				e.db.ExecContext(ctx, "UPDATE iterations SET action=?, action_result=?, reflection=?, status='failed', completed_at=CURRENT_TIMESTAMP WHERE id=?", action.Action, actErr, action.Reason, iterID)
 				e.bus.Publish(events.Event{Type: "api.error", Payload: map[string]any{"objective_id": objectiveID, "run_id": runID, "iteration_id": iterID, "action": action.Action, "error": actErr}})
+				if consecutiveToolFailures >= 3 {
+					e.failRun(ctx, runID, objectiveID, fmt.Sprintf("%s failed %d consecutive times: %s", action.Action, consecutiveToolFailures, actErr))
+					return
+				}
 			} else {
+				consecutiveToolFailures = 0
 				result = res
 				b, _ := json.Marshal(result)
 				e.log.Info("tool success", "action", action.Action, "result_len", len(b))
@@ -166,6 +173,12 @@ func (e *Engine) loop(runID, objectiveID int64, startIter int) {
 	}
 	e.db.ExecContext(context.Background(), "UPDATE agent_runs SET status='failed', finished_at=CURRENT_TIMESTAMP WHERE id=?", runID)
 	e.db.ExecContext(context.Background(), "UPDATE objectives SET status='failed' WHERE id=?", objectiveID)
+}
+
+func (e *Engine) failRun(ctx context.Context, runID, objectiveID int64, reason string) {
+	e.db.ExecContext(ctx, "UPDATE agent_runs SET status='failed', finished_at=CURRENT_TIMESTAMP WHERE id=? AND status='running'", runID)
+	e.db.ExecContext(ctx, "UPDATE objectives SET status='failed' WHERE id=? AND status='running'", objectiveID)
+	e.bus.Publish(events.Event{Type: "agent.failed", Payload: map[string]any{"objective_id": objectiveID, "run_id": runID, "error": reason}})
 }
 
 func (e *Engine) plan(ctx context.Context, objectiveID int64) (Action, string, string) {
