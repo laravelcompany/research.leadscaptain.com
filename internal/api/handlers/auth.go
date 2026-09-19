@@ -109,11 +109,14 @@ func (s *Server) Login(w http.ResponseWriter, r *http.Request) {
 	}
 	state, _ := randomURLSafe(24)
 	nonce, _ := randomURLSafe(24)
-	verifier := oauth2.GenerateVerifier()
 	flow := signFlow(state+"."+nonce+"."+strconv.FormatInt(time.Now().Unix(), 10), s.Auth.Secret)
-	http.SetCookie(w, &http.Cookie{Name: oauthFlowCookie, Value: flow + "." + verifier, Path: "/api/v1/auth", MaxAge: 600, HttpOnly: true, Secure: secureRequest(r), SameSite: http.SameSiteLaxMode})
+	http.SetCookie(w, &http.Cookie{Name: oauthFlowCookie, Value: flow, Path: "/api/v1/auth", MaxAge: 600, HttpOnly: true, Secure: secureRequest(r), SameSite: http.SameSiteLaxMode})
 	cfg := s.Auth.oauthConfig(provider.Endpoint())
-	http.Redirect(w, r, cfg.AuthCodeURL(state, oidc.Nonce(nonce), oauth2.S256ChallengeOption(verifier)), http.StatusFound)
+	// This is LinkedIn's confidential web-client flow. LinkedIn documents PKCE
+	// separately for native clients, without a client secret and on a different
+	// authorization endpoint. Mixing a PKCE verifier into this confidential
+	// exchange causes LinkedIn to reject otherwise-valid client credentials.
+	http.Redirect(w, r, cfg.AuthCodeURL(state, oidc.Nonce(nonce)), http.StatusFound)
 }
 func (s *Server) Callback(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query()
@@ -130,7 +133,7 @@ func (s *Server) Callback(w http.ResponseWriter, r *http.Request) {
 	}
 	defer clearFlow(w)
 	pieces := strings.Split(c.Value, ".")
-	if len(pieces) != 5 {
+	if len(pieces) != 4 {
 		slog.Warn("linkedin oauth state validation failed", "reason", "cookie_invalid")
 		writeError(w, http.StatusBadRequest, "invalid OAuth login state")
 		return
@@ -157,7 +160,7 @@ func (s *Server) Callback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	cfg := s.Auth.oauthConfig(provider.Endpoint())
-	tok, err := cfg.Exchange(r.Context(), code, oauth2.VerifierOption(pieces[4]))
+	tok, err := cfg.Exchange(r.Context(), code)
 	if err != nil {
 		status := 0
 		providerError := "token_exchange_failed"
