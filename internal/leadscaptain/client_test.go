@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -17,13 +18,13 @@ func TestSearchUsesDocumentedLeadsCaptainContract(t *testing.T) {
 		if got := r.Header.Get("Authorization"); got != "Bearer secret" {
 			t.Errorf("Authorization = %q", got)
 		}
-		if got := r.Header.Get("X-API-Token"); got != "secret" {
-			t.Errorf("X-API-Token = %q", got)
+		if got := r.Header.Get("X-API-Key"); got != "secret" {
+			t.Errorf("X-API-Key = %q", got)
 		}
 		q := r.URL.Query()
 		for key, want := range map[string]string{
 			"q": "CTO", "position_title": "CTO", "country_code": "GB",
-			"location": "London", "industry_name": "Software", "limit": "25", "page": "3",
+			"location": "London", "industry_name": "Software", "per_page": "25", "page": "3",
 		} {
 			if got := q.Get(key); got != want {
 				t.Errorf("%s = %q, want %q", key, got, want)
@@ -66,5 +67,16 @@ func TestSearchRequiresAPIConfiguration(t *testing.T) {
 				t.Fatal("Search() expected configuration error")
 			}
 		})
+	}
+}
+
+func TestSearchIncludesBoundedUpstreamErrorBody(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "upstream database unavailable", http.StatusBadGateway)
+	}))
+	defer srv.Close()
+	_, err := New(srv.URL, "secret", 5).Search(context.Background(), SearchParams{PerPage: 20})
+	if err == nil || !strings.Contains(err.Error(), "leadscaptain 502: upstream database unavailable") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
